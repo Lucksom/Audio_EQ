@@ -93,7 +93,6 @@ import androidx.core.content.ContextCompat
 import com.audioeq.audio.AutoEq
 import com.audioeq.audio.DeviceDiagnostics
 import com.audioeq.audio.Dsp
-import com.audioeq.audio.EqMath
 import com.audioeq.audio.IndexEntry
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqConstants
@@ -1073,7 +1072,9 @@ fun SoundCalibrationSheet(
                             }
 
                             val earStepCsv = remember(activeEarOffsets) {
-                                EqMath.formatCustomizedSoundStepsCsv(activeEarOffsets)
+                                activeEarOffsets.joinToString(",") { offset ->
+                                    ((offset + 42f) / 3f).roundToInt().coerceIn(0, 20).toString()
+                                }
                             }
                             Text(
                                 text = "CustomizedSoundModel Steps (INIT=-42dB, DIV=3dB): [$earStepCsv]",
@@ -1694,6 +1695,22 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
+            SettingsGroupCard(title = "ENGINE MODE ACCESSIBILITY & ASSIGNED PROCESSES") {
+                DiagnosticRow(
+                    "Legacy Mode (Zero ADB/Root)",
+                    "Broadcast Sessions · 31-Band DP PreEq · 0Hz Deep Bass Shelf · 6-Band MBC · Mode 2 HRTF (>234Hz) · Q8 Peak Limiter"
+                )
+                DiagnosticRow(
+                    "ADB / Shizuku Mode (UID 2000)",
+                    "AudioFlinger Session Discovery · Real-Time Sample Rate (fs=${diagnostics.hardwareSampleRateHz}Hz) · BT A2DP Codec Inspection"
+                )
+                DiagnosticRow(
+                    "Root Mode (su UID 0)",
+                    "Global Mix Session 0 · Direct Hardware 20-Band Q4 Register Write · System Dual-EQ Conflict Guard",
+                    showBottomBorder = false
+                )
+            }
+
             SettingsGroupCard(title = "HARDWARE & AUDIO EFFECT DIAGNOSTICS") {
                 val opModeLabel = diagnostics.operatingMode.name
                 val dpBandsLabel = when {
@@ -1701,9 +1718,9 @@ fun SettingsAndDiagnosticsSheet(
                     compatibility10Band -> "Active (10 bands)"
                     else -> "Active (31 bands)"
                 }
-                val daxBridgeLabel = when {
-                    diagnostics.hardwareDaxActive -> "Active (96-Byte 20-Band GEQ)"
-                    diagnostics.hardwareDaxDetected -> "Detected (Standby)"
+                val hwBridgeLabel = when {
+                    diagnostics.hardwareEffectActive -> "Active (96-Byte 20-Band Signed Q4)"
+                    diagnostics.hardwareEffectDetected -> "Detected (Standby)"
                     else -> "Not Present (Software DP Active)"
                 }
                 val binderCostLabel = if (diagnostics.avgBinderWriteCostMs > 0.01) {
@@ -1731,9 +1748,13 @@ fun SettingsAndDiagnosticsSheet(
 
                 DiagnosticRow("Active OperatingMode", opModeLabel)
                 DiagnosticRow("DynamicsProcessing API 28+", dpBandsLabel)
-                DiagnosticRow("OEM Hardware DAX Bridge", daxBridgeLabel)
+                DiagnosticRow("Hardware Sample Rate (fs)", "${diagnostics.hardwareSampleRateHz} Hz")
+                DiagnosticRow("Endpoint Peak Ceiling (Q8)", "${diagnostics.endpointPeakQ8} / 256")
+                DiagnosticRow("Endpoint Makeup (VOLMAX)", "${diagnostics.endpointVolmax} (Unity = 32)")
+                DiagnosticRow("Hardware DSP Bridge", hwBridgeLabel)
+                DiagnosticRow("System Dual-EQ Guard", if (diagnostics.systemEqConflictResolved) "Resolved via su" else "Software Isolated")
                 DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
-                DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "Not Supported")
+                DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported (>234 Hz)" else "Not Supported")
                 DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")
                 DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Not Supported")
                 DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")

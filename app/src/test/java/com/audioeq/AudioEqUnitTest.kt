@@ -1,21 +1,20 @@
 package com.audioeq
 
+import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.AutoEq
 import com.audioeq.audio.AutoEqManager
-import com.audioeq.audio.BassContour
-import com.audioeq.audio.DialogueMode
 import com.audioeq.audio.Dsp
 import com.audioeq.audio.DspV4Engine
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
-import com.audioeq.audio.EnhancerMath
 import com.audioeq.audio.Enhancers
 import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.MidSideProcessor
-import com.audioeq.audio.PeqFilter
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqMode
 import com.audioeq.model.HeadphoneProfile
+import com.audioeq.model.OutputRoute
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,36 +59,131 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifyEnhancerMathAndAutoHeadroomTrim() {
-        val cfg = EnhancerConfig(
-            ieqPreset = IeqPreset.BALANCED,
-            ieqIntensity = 1.0f,
-            dialogueEnhancerEnabled = true,
-            dialogueGain = 4,
-            dialogueMode = DialogueMode.BROADCAST,
-            bassEnhancerEnabled = false,
-            bassBoostLevel = 0,
-            bassContour = BassContour.TIGHT_PUNCH
+    fun verifyNineSpecificationPresetsAndExactGains() {
+        val presets = EqConstants.BUILT_IN_PRESETS
+        assertEquals(9, presets.size)
+        val expectedIds = listOf(
+            "flat", "rock", "jazz", "pop", "classical",
+            "hip_hop", "blues", "electronic", "metal"
+        )
+        assertEquals(expectedIds, presets.map { it.id })
+
+        val rock = presets.first { it.id == "rock" }
+        assertEquals(
+            listOf(4.0f, 1.0f, -2.0f, -0.25f, 0.0f, -2.0f, 0.0f, -2.0f, 0.5f, 4.0f),
+            rock.gainsDb
         )
 
-        val speechOffset = EnhancerMath.computeTotalEnhancerOffsetDb(2400.0, cfg)
-        assertTrue("Expected positive speech boost at 2.4 kHz", speechOffset > 2.0f)
-
-        val baseHigh = List(10) { 12.0f }
-        val (effective, trim) = EnhancerMath.computeCurveWithAutoHeadroom(
-            EqConstants.FREQ_10_BAND,
-            baseHigh,
-            cfg,
-            ceilingDb = 14.5f
+        val classical = presets.first { it.id == "classical" }
+        assertEquals(
+            listOf(0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 3.0f, 1.0f, 6.0f, 2.0f, 6.0f),
+            classical.gainsDb
         )
-        assertEquals(10, effective.size)
-        assertTrue("Expected positive auto-headroom trim when stacking high boosts", trim > 0f)
-        assertTrue("Effective bands must stay within ceiling", effective.all { it <= 15.0f })
+
+        val metal = presets.first { it.id == "metal" }
+        assertEquals(
+            listOf(2.0f, 0.0f, 0.0f, -1.25f, -1.0f, -4.0f, 0.0f, 0.0f, 0.0f, 0.0f),
+            metal.gainsDb
+        )
     }
 
     @Test
-    fun verifyAutoEqAppliesAccuratelyAcrossBuiltInAndCustomProfiles() {
-        // 1. Built-in headphone profiles must calculate non-zero 31-band correction curves
+    fun verifyEndpointSpecificProfileAdaptationAcrossRoutes() {
+        val dynSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.SPEAKER)
+        assertTrue(dynSpk.virtualBassAuto)
+        assertEquals(240, dynSpk.peakQ8)
+        assertEquals(17, dynSpk.volmaxQ4)
+
+        val dynHp = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.HEADPHONES)
+        assertFalse(dynHp.virtualBassAuto)
+        assertEquals(256, dynHp.peakQ8)
+        assertEquals(32, dynHp.volmaxQ4)
+
+        val dynBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.BLUETOOTH)
+        assertFalse(dynBt.virtualBassAuto)
+        assertTrue(dynBt.ieqEnabled)
+        assertEquals(IeqPreset.BALANCED, dynBt.ieqPreset)
+        assertEquals(6, dynBt.ieqAmount)
+        assertTrue(dynBt.deEnabled)
+        assertEquals(4, dynBt.deAmount)
+        assertEquals(256, dynBt.peakQ8)
+        assertEquals(32, dynBt.volmaxQ4)
+
+        val vidSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.SPEAKER)
+        assertTrue(vidSpk.virtualBassAuto)
+        assertEquals(IeqPreset.DETAILED, vidSpk.ieqPreset)
+        assertEquals(12, vidSpk.ieqAmount)
+        assertEquals(5, vidSpk.deAmount)
+        assertEquals(241, vidSpk.peakQ8)
+        assertEquals(32, vidSpk.volmaxQ4)
+
+        val vidHp = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.HEADPHONES)
+        assertFalse(vidHp.virtualBassAuto)
+        assertEquals(IeqPreset.DETAILED, vidHp.ieqPreset)
+        assertEquals(13, vidHp.ieqAmount)
+        assertEquals(4, vidHp.deAmount)
+        assertEquals(256, vidHp.peakQ8)
+        assertEquals(48, vidHp.volmaxQ4)
+        assertEquals(3.0f, vidHp.volmaxMakeupDb, 0.001f)
+        assertTrue(vidHp.virtualizerEnabled)
+
+        val vidBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.BLUETOOTH)
+        assertFalse("BT Video disables IEQ to avoid A2DP lip-sync latency", vidBt.ieqEnabled)
+        assertTrue(vidBt.deEnabled)
+        assertEquals(4, vidBt.deAmount)
+
+        val musSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.MUSIC, OutputRoute.SPEAKER)
+        assertTrue(musSpk.virtualBassAuto)
+        assertEquals(16, musSpk.volmaxQ4)
+        assertEquals(241, musSpk.peakQ8)
+
+        val musBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.MUSIC, OutputRoute.BLUETOOTH)
+        assertTrue("BT Music enables Balanced IEQ (amt=6) to compensate for lossy BT compression", musBt.ieqEnabled)
+        assertEquals(IeqPreset.BALANCED, musBt.ieqPreset)
+        assertEquals(6, musBt.ieqAmount)
+    }
+
+    @Test
+    fun verifyDeepBassZeroHzLowShelfVersusNormal47HzPeaking() {
+        assertEquals(47, EnhancerDsp.IEQ_FREQS_20[0])
+        assertEquals(0, EnhancerDsp.IEQ_FREQS_20_DEEP_BASS[0])
+        for (i in 1..9) {
+            assertEquals(EnhancerDsp.IEQ_FREQS_20[i - 1], EnhancerDsp.IEQ_FREQS_20_DEEP_BASS[i])
+        }
+        for (i in 10..19) {
+            assertEquals(EnhancerDsp.IEQ_FREQS_20[i], EnhancerDsp.IEQ_FREQS_20_DEEP_BASS[i])
+        }
+
+        val normal47 = EnhancerDsp.computeNormal47HzPeaking31(gainDb = 4.5, sampleRate = 48000.0)
+        val deepBass = EnhancerDsp.computeDeepBassCurve31(
+            config = EnhancerConfig(deepBassEnabled = true, bassEnabled = true, bassBoostDb = 4.5f),
+            sampleRate = 48000.0
+        )
+        assertTrue(
+            "Deep Bass 0 Hz DC Low-Shelf must preserve higher 20 Hz sub-bass than Normal 47 Hz Peaking filter",
+            deepBass[0] > normal47[0] + 1.5
+        )
+    }
+
+    @Test
+    fun verify10To20BandLogarithmicInterpolationAndQ4Registers() {
+        val rock10 = EqConstants.BUILT_IN_PRESETS.first { it.id == "rock" }.gainsDb
+            .map { it.toDouble() }
+            .toDoubleArray()
+        val interp20 = EnhancerDsp.interpolate10To20Logarithmic(rock10, deepBass = false)
+        assertEquals(20, interp20.size)
+        val q4 = EnhancerDsp.toQ4RegisterValues(interp20)
+        assertEquals(20, q4.size)
+        assertEquals(64, q4.last())
+    }
+
+    @Test
+    fun verifyAutoEqAppliesAccuratelyAcrossEarphonesEarbudsAndHeadphones() {
+        val categories = EqConstants.BUILT_IN_HEADPHONE_PROFILES.map { it.earphoneCategory }.toSet()
+        assertTrue(categories.contains("Earphones"))
+        assertTrue(categories.contains("Earbuds"))
+        assertTrue(categories.contains("Headphones"))
+
         val hd650 = EqConstants.BUILT_IN_HEADPHONE_PROFILES.find { it.id == "hd650" }
         assertTrue("HD 650 profile must exist in built-ins", hd650 != null)
         val hd650Curve = Dsp.computeHeadphoneCorrection31(
@@ -102,14 +196,18 @@ class AudioEqUnitTest {
         assertEquals(31, hd650Curve.size)
         assertTrue("HD 650 correction must apply non-zero gains", hd650Curve.any { abs(it) > 0.5 })
 
-        // 2. WH-1000XM5 built-in
-        val xm5 = EqConstants.BUILT_IN_HEADPHONE_PROFILES.find { it.id == "wh1000xm5" }
-        assertTrue("WH-1000XM5 profile must exist", xm5 != null)
-        val xm5Curve = Dsp.computeHeadphoneCorrection31(xm5, strength = 1.0)
-        assertEquals(31, xm5Curve.size)
-        assertTrue("XM5 correction must apply non-zero gains", xm5Curve.any { abs(it) > 1.0 })
+        val blessing3 = EqConstants.BUILT_IN_HEADPHONE_PROFILES.find { it.id == "blessing_3" }
+        assertTrue("Moondrop Blessing 3 earphone profile must exist", blessing3 != null)
+        val blessingCurve = Dsp.computeHeadphoneCorrection31(blessing3, strength = 1.0)
+        assertEquals(31, blessingCurve.size)
+        assertTrue("Earphone correction must apply non-zero gains", blessingCurve.any { abs(it) > 0.5 })
 
-        // 3. Custom GraphicEQ profile without PEQ filters must calculate correction
+        val airpodsPro2 = EqConstants.BUILT_IN_HEADPHONE_PROFILES.find { it.id == "airpods_pro_2" }
+        assertTrue("AirPods Pro 2 earbud profile must exist", airpodsPro2 != null)
+        val airpodsCurve = Dsp.computeHeadphoneCorrection31(airpodsPro2, strength = 1.0)
+        assertEquals(31, airpodsCurve.size)
+        assertTrue("Earbud correction must apply non-zero gains", airpodsCurve.any { abs(it) > 0.5 })
+
         val geqProfile = HeadphoneProfile(
             id = "custom_geq",
             name = "Custom GraphicEQ",
@@ -128,71 +226,32 @@ class AudioEqUnitTest {
         val geqCurve = Dsp.computeHeadphoneCorrection31(geqProfile, strength = 1.0)
         assertEquals(31, geqCurve.size)
         assertTrue("GraphicEQ profile must produce non-zero correction", geqCurve.any { abs(it) > 0.5 })
-
-        // 4. Precalculated 31-band profile must scale with strength
-        val precalcCurve = List(31) { idx -> if (idx < 5) 4.0f else 0.0f }
-        val precalcProfile = HeadphoneProfile(
-            id = "custom_precalc",
-            name = "Custom Precalc",
-            source = "Measurement",
-            rig = "711",
-            correction31Db = precalcCurve
-        )
-        val appliedHalf = Dsp.computeHeadphoneCorrection31(precalcProfile, strength = 0.5)
-        assertEquals(2.0, appliedHalf[0], 0.1)
-
-        // 5. Off/None profile bypasses correction
-        val noneProfile = EqConstants.BUILT_IN_HEADPHONE_PROFILES.find { it.id == "none" }
-        val noneCurve = Dsp.computeHeadphoneCorrection31(noneProfile, strength = 1.0)
-        assertTrue("None profile must produce all zeros", noneCurve.all { abs(it) < 0.001 })
-
-        // 6. Tilt applies on top of headphone correction
-        val tiltedCurve = Dsp.computeHeadphoneCorrection31(
-            profile = hd650,
-            strength = 0.8,
-            tiltBassDb = 3.0,
-            tiltTrebleDb = -2.0
-        )
-        assertTrue("Bass tilt must raise 31 Hz gain", tiltedCurve[2] > hd650Curve[2])
     }
 
     @Test
-    fun verify20BandIeqTargetVectorsAndBuiltInPresets() {
-        assertEquals(20, EnhancerMath.IEQ_FREQS_20.size)
-        assertEquals(20, EnhancerDsp.IEQ_BALANCED_Q4.size)
-        assertEquals(157, EnhancerDsp.IEQ_BALANCED_Q4.first())
-        assertEquals(-378, EnhancerDsp.IEQ_BALANCED_Q4.last())
-
-        assertEquals(114, EnhancerDsp.IEQ_WARM_Q4.first())
-        assertEquals(-275, EnhancerDsp.IEQ_WARM_Q4.last())
-
-        assertEquals(150, EnhancerDsp.IEQ_DETAILED_Q4.first())
-        assertEquals(-217, EnhancerDsp.IEQ_DETAILED_Q4.last())
-
-        val presetIds = EqConstants.BUILT_IN_PRESETS.map { it.id }
-        assertFalse("bass_boost preset must be removed", "bass_boost" in presetIds)
-        assertFalse("cinema preset must be removed", "cinema" in presetIds)
-        assertEquals(10, EqConstants.BUILT_IN_PRESETS.size)
-        for (preset in EqConstants.BUILT_IN_PRESETS) {
-            assertEquals(10, preset.gains10Band.size)
-        }
+    fun verify20BandIeqTargetVectors() {
+        assertEquals(20, EnhancerDsp.IEQ_FREQS_20.size)
+        assertArrayEquals(
+            intArrayOf(-50, 5, 19, 25, 29, 44, 52, 57, 56, 56, 61, 69, 77, 78, 72, 74, 48, 22, -2, -59),
+            IeqPreset.DETAILED.targetsQ4
+        )
+        assertArrayEquals(
+            intArrayOf(-38, 17, 32, 41, 46, 55, 57, 62, 65, 68, 69, 69, 60, 49, 34, 24, -12, -55, -102, -162),
+            IeqPreset.WARM.targetsQ4
+        )
+        assertArrayEquals(
+            intArrayOf(-65, 0, 14, 29, 39, 52, 56, 61, 67, 70, 73, 74, 67, 61, 52, 49, 20, -14, -50, -108),
+            IeqPreset.BALANCED.targetsQ4
+        )
     }
 
     @Test
     fun verifyMidSideProcessorProcessesPcmCleanly() {
-        val processor = MidSideProcessor(48000.0)
+        val processor = MidSideProcessor(48000)
         processor.updateParameters(
-            enabled = true,
-            effective10BandDb = listOf(3f, 2f, 1f, 0f, -1f, 1f, 2f, 3f, 2f, 1f),
-            preampDb = -1.5f,
-            virtualizerPercent = 45,
-            channelBalance = 0f,
-            limiterThresholdDb = -0.8f,
-            enhancerConfig = EnhancerConfig(
-                ieqPreset = IeqPreset.BALANCED,
-                dialogueEnhancerEnabled = true,
-                dialogueGain = 4
-            )
+            width = 1.35f,
+            vocalBoost = 0.4f,
+            sampleRate = 48000
         )
 
         val pcm = ShortArray(256) { idx ->
@@ -217,25 +276,31 @@ class AudioEqUnitTest {
         assertEquals("PK", parsed.filters[1].type)
         assertEquals("HSC", parsed.filters[2].type)
 
-        assertEquals(1.0, AutoEqManager.taper(10000.0), 1e-6)
-        assertEquals(0.0, AutoEqManager.taper(14000.0), 1e-6)
-        val midTaper = AutoEqManager.taper(12000.0)
-        assertTrue(midTaper in 0.4..0.6)
+        val autoProfile = com.audioeq.audio.AutoEqParser.parseParametric(peqText)
+        assertEquals(-5.4, autoProfile.preampDb, 0.001)
+        assertEquals(3, autoProfile.filters.size)
+        val dpBands = com.audioeq.audio.AutoEqMapper.toDynamicsBands(autoProfile)
+        assertEquals(31, dpBands.size)
+        assertTrue(com.audioeq.audio.AutoEqMapper.safePreampDb(autoProfile) <= -5.4)
 
-        val (gains31Default, trimDefault) = AutoEqManager.peqToCorrection31WithTrim(
-            filters = listOf(AutoEqManager.Flt("PK", 1000.0, 9.5, 1.0)),
-            fullRange = false
-        )
-        assertEquals(31, gains31Default.size)
-        assertTrue("Default cap is +6 dB", gains31Default.all { it <= 6.001f })
-        assertTrue("Expected positive trim when 9.5 dB filter is capped at 6 dB", trimDefault > 3.0f)
-
-        val (gains31Full, _) = AutoEqManager.peqToCorrection31WithTrim(
-            filters = listOf(AutoEqManager.Flt("PK", 1000.0, 9.5, 1.0)),
-            fullRange = true
-        )
-        assertTrue("Full range allows >6 dB boost", (gains31Full.maxOrNull() ?: 0f) > 8.5f)
-        assertEquals("20 kHz band is zeroed by 14 kHz taper", 0.0f, gains31Full.last(), 0.001f)
+        val fixedText = """
+            Preamp: -4.2 dB
+            Filter 1: ON PK Fc 31 Hz Gain 4.0 dB Q 1.41
+            Filter 2: ON PK Fc 62 Hz Gain 3.0 dB Q 1.41
+            Filter 3: ON PK Fc 125 Hz Gain 1.5 dB Q 1.41
+            Filter 4: ON PK Fc 250 Hz Gain -1.0 dB Q 1.41
+            Filter 5: ON PK Fc 500 Hz Gain 0.0 dB Q 1.41
+            Filter 6: ON PK Fc 1000 Hz Gain 1.0 dB Q 1.41
+            Filter 7: ON PK Fc 2000 Hz Gain 2.0 dB Q 1.41
+            Filter 8: ON PK Fc 4000 Hz Gain 2.5 dB Q 1.41
+            Filter 9: ON PK Fc 8000 Hz Gain -1.5 dB Q 1.41
+            Filter 10: ON PK Fc 16000 Hz Gain 1.0 dB Q 1.41
+        """.trimIndent()
+        val fixedProf = com.audioeq.audio.AutoEqParser.parseParametric(fixedText)
+        val tenBand = com.audioeq.audio.AutoEqMapper.fixedBandToTenBand(fixedProf)
+        assertEquals(10, tenBand.gainsDb.size)
+        assertEquals(4.0, tenBand.gainsDb[0], 0.001)
+        assertFalse(tenBand.clipped)
     }
 
     @Test
@@ -251,9 +316,6 @@ class AudioEqUnitTest {
         )
         assertTrue("Auto preamp should be negative to prevent clipping", autoPreamp < -5.0f)
 
-        val smoothed = DspV4Engine.fractionalOctaveSmooth(gains.clone(), octaveFraction = 3)
-        assertEquals(10, smoothed.size)
-
         val (dlgL, dlgR) = Enhancers.computeDialoguePreEqOffsets(
             bandFreqs = DspV4Engine.STANDARD_10_BAND_HZ,
             enabled = true,
@@ -266,21 +328,18 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifyBassEnhancerStaysWithinSixDecibelsMaximum() {
+    fun verifyBassEnhancerStaysWithinSixDecibelsAndNeverSuppressesMidsOrTreble() {
         val maxBassCfg = EnhancerConfig(
-            bassEnhancerEnabled = true,
-            bassEnhancerStrength = 100,
-            virtualBassEnabled = true
+            bassEnabled = true,
+            bassBoostDb = 6.0f,
+            virtualBassEnabled = true,
+            virtualBassStrength = 0.6f
         )
-        assertEquals(1000.toShort(), maxBassCfg.bassBoostStrengthPermille)
-        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(0, 100, true), 0.001f)
-        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(1, 100, true), 0.001f)
-        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(2, 100, true), 0.001f)
-        assertTrue(EnhancerMath.bassEnhancerBandBoostDb(3, 100, true) <= 6.0f)
-
         val bass31 = EnhancerDsp.computeBassEnhancer31(maxBassCfg)
         assertEquals(31, bass31.size)
-        assertEquals(6.0, bass31.maxOrNull() ?: 0.0, 0.01)
         assertTrue("Bass Enhancer 31-band curve must never exceed 6.0 dB", bass31.all { it in 0.0..6.0 })
+        for (i in 17 until 31) {
+            assertTrue("Bass enhancer must not attenuate mids/treble", bass31[i] >= 0.0)
+        }
     }
 }

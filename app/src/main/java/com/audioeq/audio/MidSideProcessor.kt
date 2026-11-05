@@ -59,7 +59,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
 
         val width = 1.0f + (virtualizerPercent / 100f)
         val vocalBoost = if (enhancerConfig.dialogueEnhancerEnabled) {
-            (enhancerConfig.dialogueGain / 12f).coerceIn(0f, 1f)
+            (enhancerConfig.dialogueAmount / 16f).coerceIn(0f, 1f)
         } else {
             0f
         }

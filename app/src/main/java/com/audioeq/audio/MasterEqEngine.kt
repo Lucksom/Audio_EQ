@@ -64,7 +64,8 @@ data class EngineRenderParams(
     val transientMode: Boolean = false,
     val usbBitPerfectEnabled: Boolean = false,
     val abxBypassCurve: Boolean = false,
-    val musicOnlyTracking: Boolean = true
+    val musicOnlyTracking: Boolean = true,
+    val hardwareSampleRateHz: Int = 48000
 )
 
 class MasterEqEngine(
@@ -95,7 +96,7 @@ class MasterEqEngine(
     private val bassBoostSessions = ConcurrentHashMap<Int, BassBoost>()
     private val vendorBassBoostSessions = ConcurrentHashMap<Int, AudioEffect>()
     private var vendorSetParamMethod: java.lang.reflect.Method? = null
-    private val hardwareDaxSessions = ConcurrentHashMap<Int, AudioEffect>()
+    private val hardwareEffectSessions = ConcurrentHashMap<Int, AudioEffect>()
     private val lastAppliedL = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedR = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedPostL = ConcurrentHashMap<Int, FloatArray>()
@@ -121,7 +122,7 @@ class MasterEqEngine(
         private set
 
     @Volatile
-    var hardwareDaxSupported: Boolean = false
+    var hardwareEffectSupported: Boolean = false
         private set
 
     private val tickRunnable = object : Runnable {
@@ -223,7 +224,7 @@ class MasterEqEngine(
     }
 
     init {
-        hardwareDaxSupported = detectHardwareDaxEffect()
+        hardwareEffectSupported = detectHardwareEffect()
         registerReceiversAndCallbacks()
         knownSessions.add(0)
         dspHandler.post {
@@ -234,7 +235,7 @@ class MasterEqEngine(
         }
     }
 
-    private fun detectHardwareDaxEffect(): Boolean {
+    private fun detectHardwareEffect(): Boolean {
         return try {
             val descriptors = AudioEffect.queryEffects() ?: return false
             descriptors.any { desc ->
@@ -532,7 +533,7 @@ class MasterEqEngine(
                     }
                 }
 
-                tryAttachHardwareDaxSession(sid)
+                tryAttachHardwareEffectSession(sid)
 
                 if (requestedEngineMode.get() == EngineMode.LEGACY) {
                     activeOperatingMode = OperatingMode.LEGACY_TIER2_DP
@@ -565,7 +566,7 @@ class MasterEqEngine(
                     bassBoostSessions[sid] = bb
                 } catch (_: Throwable) {
                 }
-                tryAttachHardwareDaxSession(sid)
+                tryAttachHardwareEffectSession(sid)
                 if (requestedEngineMode.get() == EngineMode.LEGACY && dpSessions.isEmpty()) {
                     activeOperatingMode = OperatingMode.LEGACY_TIER1_EQ
                 }
@@ -574,7 +575,7 @@ class MasterEqEngine(
         }
     }
 
-    private fun tryAttachHardwareDaxSession(sid: Int) {
+    private fun tryAttachHardwareEffectSession(sid: Int) {
         try {
             val descriptors = AudioEffect.queryEffects()
             val ctor = AudioEffect::class.java.getConstructor(
@@ -599,9 +600,9 @@ class MasterEqEngine(
                 )
                 vendorBassBoostSessions[sid] = vBb
             }
-            if (hardwareDaxSupported) {
+            if (hardwareEffectSupported) {
                 val fx = ctor.newInstance(EFFECT_TYPE_HARDWARE_DSP, EFFECT_UUID_IMPL_SW, 0, sid)
-                hardwareDaxSessions[sid] = fx
+                hardwareEffectSessions[sid] = fx
             }
         } catch (_: Throwable) {
         }
@@ -644,7 +645,7 @@ class MasterEqEngine(
             } catch (_: Throwable) {
             }
         }
-        hardwareDaxSessions.remove(sid)?.let {
+        hardwareEffectSessions.remove(sid)?.let {
             try {
                 it.release()
             } catch (_: Throwable) {
@@ -694,9 +695,17 @@ class MasterEqEngine(
             15
         }
 
+        val activeRoute = try {
+            detectCurrentRoute(audioManager)
+        } catch (_: Throwable) {
+            OutputRoute.SPEAKER
+        }
+        val isSpeakerRoute = (activeRoute == OutputRoute.SPEAKER)
+        val effectiveHpProfile = if (!isSpeakerRoute) params.headphoneProfile else null
+
         val calCurve = DoubleArray(31)
         val hpCurve = Dsp.computeHeadphoneCorrection31(
-            profile = params.headphoneProfile,
+            profile = effectiveHpProfile,
             strength = params.headphoneStrength,
             fullRange = params.headphoneFullRange,
             tiltBassDb = params.tiltBassDb,
@@ -705,21 +714,24 @@ class MasterEqEngine(
         for (i in 0 until 31) {
             calCurve[i] += hpCurve[i]
         }
-        if (params.speakerCalEnabled && params.speakerCorrection31Db.size == 31) {
+        if (params.speakerCalEnabled && isSpeakerRoute && params.speakerCorrection31Db.size == 31) {
             for (i in 0 until 31) {
                 calCurve[i] += params.speakerCorrection31Db[i] * params.speakerCalStrength.coerceIn(0.0, 1.0)
             }
         }
 
-        val isSpeakerRoute = try {
-            detectCurrentRoute(audioManager) == OutputRoute.SPEAKER
-        } catch (_: Throwable) {
-            false
-        }
+        val cfg = params.enhancerConfig
+        val endpointSpec = EnhancerDsp.resolveEndpointSpec(
+            profile = cfg.profile,
+            route = activeRoute,
+            deepBassOverride = cfg.deepBassEnabled
+        )
+        val sampleRateHz = params.hardwareSampleRateHz.coerceIn(44100, 192000).toDouble()
 
         val enhancerCurve31 = EnhancerDsp.computeCombinedEnhancer31(
-            config = params.enhancerConfig,
-            isSpeaker = isSpeakerRoute
+            config = cfg,
+            isSpeaker = isSpeakerRoute,
+            sampleRate = sampleRateHz
         )
         for (i in 0 until 31) {
             calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 15.0)
@@ -756,7 +768,18 @@ class MasterEqEngine(
         val bal = params.balanceDb.coerceIn(-6.0, 6.0)
         val trimL = if (bal > 0.0) -bal else 0.0
         val trimR = if (bal < 0.0) bal else 0.0
-        val basePreamp = params.preampDb.coerceIn(-12.0, 6.0)
+        val autoEqSafePreamp = if (
+            effectiveHpProfile != null &&
+            effectiveHpProfile.id != "none" &&
+            effectiveHpProfile.peqFilters.isNotEmpty()
+        ) {
+            val autoProf = AutoEqMapper.fromPeqFilters(effectiveHpProfile.peqFilters)
+            AutoEqMapper.safePreampDb(autoProf) * params.headphoneStrength.coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        val basePreamp = kotlin.math.min(params.preampDb.coerceIn(-12.0, 6.0), autoEqSafePreamp)
+        val volmaxMakeup = if (cfg.profile != AudioProfile.OFF) endpointSpec.volmaxMakeupDb.toDouble() else 0.0
 
         val is10BandMode = params.compatibility10Band
         val bandCutoffs = if (is10BandMode) Dsp.FALLBACK_10_CUT else Dsp.RENDER_CUT
@@ -784,12 +807,11 @@ class MasterEqEngine(
         val postL = FloatArray(bandCount) { 0.0f }
         val postR = FloatArray(bandCount) { 0.0f }
 
-        val cfg = params.enhancerConfig
-        val leftInputGain = if (effectiveEnabled) (basePreamp + trimL).toFloat() else 0.0f
-        val rightInputGain = if (effectiveEnabled) (basePreamp + trimR).toFloat() else 0.0f
+        val leftInputGain = if (effectiveEnabled) (basePreamp + trimL + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
+        val rightInputGain = if (effectiveEnabled) (basePreamp + trimR + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
         val makeupPostGain = if (
             effectiveEnabled &&
-            (cfg.bassEnhancerEnabled || cfg.dialogueEnhancerEnabled)
+            (cfg.bassEnabled || cfg.dialogueEnhancerEnabled || cfg.deepBassEnabled)
         ) 0.35f else 0.0f
 
         val hasDialogueMbc = cfg.dialogueEnhancerEnabled
@@ -798,6 +820,12 @@ class MasterEqEngine(
         } else 0f
 
         val hasSpecificMusicSessions = dpSessions.keys.any { it > 0 } || eqSessions.keys.any { it > 0 }
+
+        val effectiveLimiterCeilingDb = if (isSpeakerRoute) {
+            minOf(params.limiterCeilingDb.toFloat(), endpointSpec.peakCeilingDb).coerceIn(-3.0f, -0.5f)
+        } else {
+            params.limiterCeilingDb.toFloat().coerceIn(-3.0f, 0.0f)
+        }
 
         for ((sid, dp) in dpSessions) {
             try {
@@ -847,51 +875,21 @@ class MasterEqEngine(
 
                 for (ch in 0..1) {
                     for (b in 0 until 6) {
-                        val meanBoost = max(
-                            0.0,
-                            Dsp.MBC_RANGE[b].map { idx ->
-                                val vL = targetL31.getOrElse(idx) { 0.0 }
-                                val vR = targetR31.getOrElse(idx) { 0.0 }
-                                max(vL, vR)
-                            }.average()
-                        ).toFloat()
                         val mbcBand = dp.getMbcBandByChannelIndex(ch, b)
-                        mbcBand.isEnabled = sessionEnabled
                         mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
-                        when {
-                            cfg.bassEnhancerEnabled && (b == 0 || b == 1) -> {
-                                mbcBand.attackTime = 15.0f
-                                mbcBand.releaseTime = 110.0f
-                                mbcBand.ratio = if (cfg.virtualBassEnabled) 2.0f else 1.6f
-                                mbcBand.threshold = (-1.0f + meanBoost).coerceAtMost(-0.5f)
-                                mbcBand.kneeWidth = 6.0f
-                                mbcBand.noiseGateThreshold = -85.0f
-                                mbcBand.expanderRatio = 1.0f
-                                mbcBand.preGain = 0.0f
-                                mbcBand.postGain = makeupPostGain
-                            }
-                            b in 2..3 && hasDialogueMbc -> {
-                                mbcBand.attackTime = 2.5f
-                                mbcBand.releaseTime = 55.0f
-                                mbcBand.ratio = 1.0f + (0.5f * deFactor)
-                                mbcBand.threshold = (-5.0f + meanBoost).coerceAtMost(-0.8f)
-                                mbcBand.kneeWidth = 8.0f
-                                mbcBand.noiseGateThreshold = -75.0f
-                                mbcBand.expanderRatio = 1.0f
-                                mbcBand.preGain = 0.0f
-                                mbcBand.postGain = makeupPostGain + (0.8f * deFactor)
-                            }
-                            else -> {
-                                mbcBand.attackTime = Dsp.MBC_ATTACK_MS[b]
-                                mbcBand.releaseTime = Dsp.MBC_RELEASE_MS[b]
-                                mbcBand.ratio = 1.05f
-                                mbcBand.threshold = (-6.0f + meanBoost).coerceAtMost(-0.8f)
-                                mbcBand.kneeWidth = 6.0f
-                                mbcBand.noiseGateThreshold = -85.0f
-                                mbcBand.expanderRatio = 1.0f
-                                mbcBand.preGain = 0.0f
-                                mbcBand.postGain = makeupPostGain
-                            }
+                        if (sessionEnabled && hasDialogueMbc && b in 2..3) {
+                            mbcBand.isEnabled = true
+                            mbcBand.attackTime = 2.5f
+                            mbcBand.releaseTime = 55.0f
+                            mbcBand.ratio = 1.0f + (0.5f * deFactor)
+                            mbcBand.threshold = -1.5f
+                            mbcBand.kneeWidth = 8.0f
+                            mbcBand.noiseGateThreshold = -75.0f
+                            mbcBand.expanderRatio = 1.0f
+                            mbcBand.preGain = 0.0f
+                            mbcBand.postGain = (0.8f * deFactor)
+                        } else {
+                            mbcBand.isEnabled = false
                         }
                         dp.setMbcBandByChannelIndex(ch, b, mbcBand)
                     }
@@ -901,10 +899,10 @@ class MasterEqEngine(
                     true,
                     params.limiterEnabled && sessionEnabled,
                     0,
-                    1.0f,
-                    60.0f,
-                    10.0f,
-                    params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.5f),
+                    4.0f,
+                    80.0f,
+                    2.0f,
+                    effectiveLimiterCeilingDb,
                     0.0f
                 )
                 dp.setLimiterAllChannelsTo(lim)
@@ -912,7 +910,10 @@ class MasterEqEngine(
             }
         }
 
-        val virtStrength = (((params.midSideWidth - 1.0f).coerceIn(0f, 1f)) * 1000f).roundToInt().coerceIn(0, 1000)
+        val surroundContribution = if (cfg.surroundEnabled) cfg.surroundWidth.coerceIn(0f, 1f) else 0f
+        val manualWidthContribution = (params.midSideWidth - 1.0f).coerceIn(0f, 1f)
+        val combinedVirtNorm = maxOf(surroundContribution, manualWidthContribution)
+        val virtStrength = (combinedVirtNorm * 1000f).roundToInt().coerceIn(0, 1000)
 
         for ((sid, virt) in virtualizerSessions) {
             try {
@@ -945,41 +946,16 @@ class MasterEqEngine(
             }
         }
 
-        val targetBassStrength: Short = when {
-            !effectiveEnabled -> 0
-            cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
-            else -> 0
-        }
-
-        for ((sid, vFx) in vendorBassBoostSessions) {
+        for ((_, vFx) in vendorBassBoostSessions) {
             try {
-                val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
-                    false
-                } else {
-                    effectiveEnabled
-                }
-                val wantBb = sessionEnabled && targetBassStrength > 0
-                vFx.enabled = wantBb
-                if (wantBb) {
-                    val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetBassStrength).array()
-                    vendorSetParamMethod?.invoke(vFx, 1, buf)
-                }
+                if (vFx.enabled) vFx.enabled = false
             } catch (_: Throwable) {
             }
         }
 
-        for ((sid, bb) in bassBoostSessions) {
+        for ((_, bb) in bassBoostSessions) {
             try {
-                val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
-                    false
-                } else {
-                    effectiveEnabled
-                }
-                val wantBb = sessionEnabled && targetBassStrength > 0
-                if (bb.enabled != wantBb) bb.enabled = wantBb
-                if (wantBb && bb.strengthSupported) {
-                    bb.setStrength(targetBassStrength)
-                }
+                if (bb.enabled) bb.enabled = false
             } catch (_: Throwable) {
             }
         }
@@ -992,20 +968,50 @@ class MasterEqEngine(
             }
         }
 
-        if (hardwareDaxSessions.isNotEmpty()) {
-            val ieqTarget20 = EnhancerDsp.ieqTarget20Db(
-                params.enhancerConfig.ieqPreset,
-                params.enhancerConfig.ieqCustom10Db
+        if (hardwareEffectSessions.isNotEmpty()) {
+            val geq20Db = EnhancerDsp.interpolate10To20Logarithmic(
+                gains10 = params.bandGains10L,
+                deepBass = endpointSpec.deepBassActive
             )
-            val gains20Q4 = IntArray(20) { idx ->
-                if (!effectiveEnabled) 0
-                else (ieqTarget20[idx] * 64.0).roundToInt().coerceIn(-960, 384)
+            val autoProf = if (
+                effectiveHpProfile != null &&
+                effectiveHpProfile.id != "none" &&
+                effectiveHpProfile.peqFilters.isNotEmpty()
+            ) {
+                AutoEqMapper.fromPeqFilters(effectiveHpProfile.peqFilters)
+            } else {
+                null
             }
-            val payload = EnhancerDsp.buildHardwareDax96BytePayload(
+            val freqs20 = if (endpointSpec.deepBassActive) {
+                EnhancerDsp.IEQ_FREQS_20_DEEP_BASS
+            } else {
+                EnhancerDsp.IEQ_FREQS_20
+            }
+            val mu = (cfg.ieqAmount.coerceIn(0, 16) / 16.0)
+            val ieqTargetsQ4 = cfg.ieqPreset.targetsQ4
+            val combined20Db = DoubleArray(20) { k ->
+                val ieqDb = if (cfg.ieqPreset != IeqPreset.OFF) (ieqTargetsQ4[k] / 16.0) * mu else 0.0
+                val fHz = freqs20[k].coerceAtLeast(20).toDouble()
+                val autoEqDb = if (autoProf != null) {
+                    AutoEqMapper.responseDb(autoProf, fHz) * params.headphoneStrength.coerceIn(0.0, 1.0)
+                } else {
+                    0.0
+                }
+                (geq20Db[k] + ieqDb + autoEqDb).coerceIn(-12.0, 12.0)
+            }
+            val gains20Q4 = if (effectiveEnabled) {
+                EnhancerDsp.toQ4RegisterValues(combined20Db)
+            } else {
+                IntArray(20) { 0 }
+            }
+            val payload = EnhancerDsp.buildHardwareRegisterPayload(
                 gains20Q4 = gains20Q4,
-                ieqPresetIndex = params.enhancerConfig.ieqPreset.index
+                ieqPresetIndex = cfg.ieqPreset.ordinal,
+                deepBassEnabled = endpointSpec.deepBassActive,
+                peakQ8 = endpointSpec.peakQ8,
+                volmaxQ4 = endpointSpec.volmaxQ4
             )
-            for ((sid, hwFx) in hardwareDaxSessions) {
+            for ((sid, hwFx) in hardwareEffectSessions) {
                 try {
                     val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
                         false
@@ -1095,7 +1101,7 @@ class MasterEqEngine(
 
     fun getActiveVirtualizerCount(): Int = virtualizerSessions.size
 
-    fun getActiveHardwareDaxCount(): Int = hardwareDaxSessions.size
+    fun getActiveHardwareEffectCount(): Int = hardwareEffectSessions.size
 
     fun release() {
         try {

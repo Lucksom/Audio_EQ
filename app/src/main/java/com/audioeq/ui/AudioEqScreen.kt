@@ -32,6 +32,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.audioeq.model.EngineMode
+import com.audioeq.model.OutputRoute
+import com.audioeq.ui.components.AutoEqCard
 import com.audioeq.ui.components.EnhancerCard
 import com.audioeq.ui.components.EqualizerCard
 import com.audioeq.ui.components.PresetsCard
@@ -141,6 +143,29 @@ fun AudioEqScreen(
                     )
                 }
 
+                if (uiState.activeRoute != OutputRoute.SPEAKER) {
+                    item {
+                        AutoEqCard(
+                            masterEnabled = uiState.masterEnabled,
+                            activeRoute = uiState.activeRoute,
+                            connectedProductName = uiState.connectedProductName,
+                            engineMode = uiState.engineMode,
+                            operatingMode = uiState.operatingMode,
+                            headphoneProfiles = uiState.headphoneProfiles,
+                            selectedHeadphoneProfileId = uiState.headphoneProfileId,
+                            preampDb = uiState.preampDb,
+                            autoEqIndex = uiState.autoEqIndex,
+                            suggestedAutoEqEntry = uiState.suggestedAutoEqEntry,
+                            autoEqClipped = uiState.autoEqClipped,
+                            autoEqUseTenBandSliders = uiState.autoEqUseTenBandSliders,
+                            onApplyAutoEqEntry = { entry -> viewModel.applyAutoEqEntry(entry) },
+                            onToggleUseTenBandSliders = viewModel::setAutoEqUseTenBandSliders,
+                            onClearAutoEq = viewModel::clearAutoEqProfile,
+                            onDismissSuggestion = viewModel::dismissSuggestedAutoEq
+                        )
+                    }
+                }
+
                 item {
                     val sliderGains = if (uiState.editingRightChannel) {
                         uiState.rightBands.map { it.gainDb }
@@ -186,20 +211,21 @@ fun AudioEqScreen(
                 item {
                     EnhancerCard(
                         config = uiState.enhancerConfig,
+                        activeRoute = uiState.activeRoute,
                         enabled = uiState.masterEnabled,
-                        onSelectIeqPreset = viewModel::setIeqPreset,
-                        onIeqAmountChange = viewModel::updateIeqAmount,
-                        onIeqCustomBandChange = viewModel::updateIeqCustomBand,
-                        onResetIeqCustomBands = viewModel::resetIeqCustomBands,
-                        onToggleDialogueEnhancer = viewModel::setDialogueEnhancerEnabled,
-                        onDialogueAmountChange = viewModel::updateDialogueAmount,
-                        onDialogueDuckingChange = viewModel::updateDialogueDucking,
-                        onToggleBassEnhancer = viewModel::setBassEnhancerEnabled,
-                        onBassStrengthChange = viewModel::updateBassEnhancerStrength,
+                        onSelectProfile = viewModel::selectAudioProfile,
+                        onToggleDeepBass = viewModel::setDeepBassEnabled,
+                        onToggleBass = viewModel::setBassEnabled,
+                        onBassBoostChange = viewModel::setBassBoostDb,
                         onToggleVirtualBass = viewModel::setVirtualBassEnabled,
-                        onVirtualBassStrengthChange = viewModel::updateVirtualBassStrength,
-                        onResetAllEnhancers = viewModel::resetEnhancers,
-                        onOpenCalibrationSheet = { viewModel.setShowCalibrationSheet(true) }
+                        onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
+                        onSelectIeqPreset = viewModel::selectIeqPreset,
+                        onIeqAmountChange = viewModel::setIeqAmount,
+                        onToggleDialogue = viewModel::setDialogueEnabled,
+                        onDialogueAmountChange = viewModel::setDialogueAmount,
+                        onToggleSurround = viewModel::setSurroundEnabled,
+                        onSurroundWidthChange = viewModel::setSurroundWidth,
+                        onResetAll = viewModel::resetEnhancers
                     )
                 }
 

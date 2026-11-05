@@ -61,7 +61,17 @@ data class MonetPalette(
     val secondaryRamp: Map<Int, Color>,
     val tertiaryRamp: Map<Int, Color>,
     val neutralRamp: Map<Int, Color>
-)
+) {
+    val bgCard: Color get() = sCont
+    val surface1: Color get() = sLow
+    val surface2: Color get() = sHigh
+    val borderSubtle: Color get() = outlineV
+    val textPrimary: Color get() = onSurface
+    val textSecondary: Color get() = onVar
+    val textMuted: Color get() = onVar.copy(alpha = 0.78f)
+    val primaryContainer: Color get() = primaryC
+    val onPrimaryContainer: Color get() = onPrimaryC
+}
 
 val LocalMonetPalette = staticCompositionLocalOf {
     MonetEngine.buildPalette(seedHex = "#6750a4", dark = false)

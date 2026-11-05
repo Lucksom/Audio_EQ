@@ -42,11 +42,15 @@ data class DeviceDiagnostics(
     val usbBitPerfectSupported: Boolean = false,
     val usbBitPerfectActive: Boolean = false,
     val virtualizerSupported: Boolean = true,
-    val hardwareDaxDetected: Boolean = false,
-    val hardwareDaxActive: Boolean = false,
+    val hardwareEffectDetected: Boolean = false,
+    val hardwareEffectActive: Boolean = false,
     val musicOnlyTracking: Boolean = true,
     val notificationAccessGranted: Boolean = false,
-    val trackedMusicSummary: String = "Monitoring music players"
+    val trackedMusicSummary: String = "Monitoring music players",
+    val hardwareSampleRateHz: Int = 48000,
+    val endpointPeakQ8: Int = 240,
+    val endpointVolmax: Int = 32,
+    val systemEqConflictResolved: Boolean = false
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
@@ -64,9 +68,12 @@ class AudioEngineController(
     private var currentDeviceKey: String = "speaker:builtin"
     private var currentProductName: String? = null
     private var currentBluetoothCodec: String? = null
+    @Volatile
+    private var currentSampleRateHz: Int = 48000
+    @Volatile
+    private var systemEqResolved: Boolean = false
 
     val midSideProcessor = MidSideProcessor(48000)
-    val harmonicVirtualBass = HarmonicVirtualBassGenerator(48000)
 
     private val masterEngine = MasterEqEngine(
         context = context,
@@ -139,6 +146,10 @@ class AudioEngineController(
                 musicOnly = latestRenderParams.musicOnlyTracking
             )
             masterEngine.syncDiscoveredSessions(sessions)
+            currentSampleRateHz = shizukuManager.readHardwareSampleRateHz()
+            if (mode == EngineMode.ROOT && !systemEqResolved) {
+                systemEqResolved = shizukuManager.resolveSystemEqConflictIfRoot()
+            }
             if (currentRoute == OutputRoute.BLUETOOTH) {
                 currentBluetoothCodec = shizukuManager.readBluetoothCodecSummary()
             } else {
@@ -146,6 +157,7 @@ class AudioEngineController(
             }
         } else {
             masterEngine.syncDiscoveredSessions(MusicAppTracker.getVerifiedMusicSessionIds())
+            currentSampleRateHz = 48000
             currentBluetoothCodec = null
         }
 
@@ -175,7 +187,7 @@ class AudioEngineController(
                     _gainReduction6.value = List(6) { 0f }
                 } else {
                     val cal31 = Dsp.computeHeadphoneCorrection31(
-                        profile = p.headphoneProfile,
+                        profile = if (currentRoute != OutputRoute.SPEAKER) p.headphoneProfile else null,
                         strength = p.headphoneStrength,
                         fullRange = p.headphoneFullRange,
                         tiltBassDb = p.tiltBassDb,
@@ -288,7 +300,7 @@ class AudioEngineController(
             limiterCeilingDb = limiterCeilingDb.toDouble(),
             highPassHz = subBassHighPassHz.toDouble(),
             iso226Enabled = iso226ContourEnabled,
-            headphoneProfile = headphoneProfile,
+            headphoneProfile = if (activeRoute != OutputRoute.SPEAKER) headphoneProfile else null,
             headphoneStrength = headphoneCorrectionStrength.toDouble(),
             headphoneFullRange = headphoneFullRange,
             tiltBassDb = tiltBassDb.toDouble(),
@@ -304,7 +316,8 @@ class AudioEngineController(
             transientMode = transientMode,
             usbBitPerfectEnabled = usbBitPerfectEnabled,
             abxBypassCurve = abxBypassCurve,
-            musicOnlyTracking = musicOnlyTracking
+            musicOnlyTracking = musicOnlyTracking,
+            hardwareSampleRateHz = currentSampleRateHz
         )
         latestRenderParams = params
         masterEngine.updateParams(params)
@@ -323,6 +336,8 @@ class AudioEngineController(
         val roundedBinderCost = kotlin.math.round(masterEngine.avgBinderWriteCostMs * 100.0) / 100.0
         val notifGranted = MusicAppTracker.isNotificationListenerEnabled(context)
         val trackedSummary = MusicAppTracker.trackedSessionsSummary.value
+        val cfg = latestRenderParams.enhancerConfig
+        val epSpec = EnhancerDsp.resolveEndpointSpec(cfg.profile, currentRoute, cfg.deepBassEnabled)
         _diagnostics.value = DeviceDiagnostics(
             dynamicsProcessingSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
             dynamicsProcessingActive = masterEngine.activeOperatingMode != OperatingMode.LEGACY_TIER1_EQ &&
@@ -342,11 +357,15 @@ class AudioEngineController(
             usbBitPerfectSupported = masterEngine.isUsbBitPerfectSupportedOnDevice(),
             usbBitPerfectActive = masterEngine.usbBitPerfectActive,
             virtualizerSupported = masterEngine.getActiveVirtualizerCount() > 0 || Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
-            hardwareDaxDetected = masterEngine.hardwareDaxSupported,
-            hardwareDaxActive = masterEngine.getActiveHardwareDaxCount() > 0,
+            hardwareEffectDetected = masterEngine.hardwareEffectSupported,
+            hardwareEffectActive = masterEngine.getActiveHardwareEffectCount() > 0,
             musicOnlyTracking = latestRenderParams.musicOnlyTracking,
             notificationAccessGranted = notifGranted,
-            trackedMusicSummary = trackedSummary
+            trackedMusicSummary = trackedSummary,
+            hardwareSampleRateHz = currentSampleRateHz,
+            endpointPeakQ8 = epSpec.peakQ8,
+            endpointVolmax = epSpec.volmaxQ4,
+            systemEqConflictResolved = systemEqResolved
         )
     }
 

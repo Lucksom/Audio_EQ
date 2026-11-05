@@ -13,19 +13,235 @@ import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+enum class FilterType { PK, LSC, HSC }
+
+data class AutoEqFilter(
+    val type: FilterType,
+    val fc: Double,
+    val gainDb: Double,
+    val q: Double
+) {
+    fun toPeqFilter(): PeqFilter = PeqFilter(type.name, fc, gainDb, q)
+}
+
+data class AutoEqProfile(
+    val preampDb: Double,
+    val filters: List<AutoEqFilter>
+)
+
+object AutoEqParser {
+    private val preampRe = Regex("""Preamp:\s*(-?\d+(?:\.\d+)?)\s*dB""", RegexOption.IGNORE_CASE)
+    private val filterRe = Regex(
+        """Filter\s*\d+:\s*ON\s+(PK|PEQ|LSC|HSC|LS|HS)\s+Fc\s+(\d+(?:\.\d+)?)\s*Hz\s+Gain\s+([+-]?\d+(?:\.\d+)?)\s*dB(?:\s+Q\s+(\d+(?:\.\d+)?))?""",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun parseParametric(text: String): AutoEqProfile {
+        val preamp = preampRe.find(text)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+        val filters = filterRe.findAll(text).mapNotNull { m ->
+            val type = when (m.groupValues[1].uppercase(Locale.US)) {
+                "PK", "PEQ" -> FilterType.PK
+                "LSC", "LS" -> FilterType.LSC
+                "HSC", "HS" -> FilterType.HSC
+                else -> return@mapNotNull null
+            }
+            val qVal = m.groupValues[4].ifEmpty { "0.7071" }.toDouble()
+            AutoEqFilter(
+                type = type,
+                fc = m.groupValues[2].toDouble(),
+                gainDb = m.groupValues[3].toDouble(),
+                q = qVal
+            )
+        }.toList()
+        require(filters.isNotEmpty()) { "No filters found: wrong file?" }
+        return AutoEqProfile(preamp, filters)
+    }
+
+    fun parseGraphic(text: String): List<Pair<Double, Double>> {
+        val line = text.lineSequence().firstOrNull { it.trim().startsWith("GraphicEQ:", true) }
+            ?: return emptyList()
+        return line.substringAfter(":").split(";").mapNotNull { point ->
+            val p = point.trim().split(Regex("\\s+"))
+            val f = p.getOrNull(0)?.toDoubleOrNull()
+            val g = p.getOrNull(1)?.toDoubleOrNull()
+            if (p.size >= 2 && f != null && g != null) f to g else null
+        }
+    }
+}
+
+class Biquad(
+    type: FilterType,
+    private val fs: Double,
+    f0: Double,
+    gainDb: Double,
+    q: Double
+) {
+    val b0: Double
+    val b1: Double
+    val b2: Double
+    val a1: Double
+    val a2: Double
+
+    init {
+        val a = 10.0.pow(gainDb / 40.0)
+        val w0 = 2.0 * PI * f0 / fs
+        val cw = cos(w0)
+        val alpha = sin(w0) / (2.0 * q)
+        val sqA2alpha = 2.0 * sqrt(a) * alpha
+        val nb0: Double
+        val nb1: Double
+        val nb2: Double
+        val na0: Double
+        val na1: Double
+        val na2: Double
+        when (type) {
+            FilterType.PK -> {
+                nb0 = 1.0 + alpha * a
+                nb1 = -2.0 * cw
+                nb2 = 1.0 - alpha * a
+                na0 = 1.0 + alpha / a
+                na1 = -2.0 * cw
+                na2 = 1.0 - alpha / a
+            }
+            FilterType.LSC -> {
+                nb0 = a * ((a + 1.0) - (a - 1.0) * cw + sqA2alpha)
+                nb1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cw)
+                nb2 = a * ((a + 1.0) - (a - 1.0) * cw - sqA2alpha)
+                na0 = (a + 1.0) + (a - 1.0) * cw + sqA2alpha
+                na1 = -2.0 * ((a - 1.0) + (a + 1.0) * cw)
+                na2 = (a + 1.0) + (a - 1.0) * cw - sqA2alpha
+            }
+            FilterType.HSC -> {
+                nb0 = a * ((a + 1.0) + (a - 1.0) * cw + sqA2alpha)
+                nb1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cw)
+                nb2 = a * ((a + 1.0) + (a - 1.0) * cw - sqA2alpha)
+                na0 = (a + 1.0) - (a - 1.0) * cw + sqA2alpha
+                na1 = 2.0 * ((a - 1.0) - (a + 1.0) * cw)
+                na2 = (a + 1.0) - (a - 1.0) * cw - sqA2alpha
+            }
+        }
+        b0 = nb0 / na0
+        b1 = nb1 / na0
+        b2 = nb2 / na0
+        a1 = na1 / na0
+        a2 = na2 / na0
+    }
+
+    fun magnitudeDb(f: Double): Double {
+        val w = 2.0 * PI * f / fs
+        val cw = cos(w)
+        val sw = sin(w)
+        val c2 = cos(2.0 * w)
+        val s2 = sin(2.0 * w)
+        val nr = b0 + b1 * cw + b2 * c2
+        val ni = -(b1 * sw + b2 * s2)
+        val dr = 1.0 + a1 * cw + a2 * c2
+        val di = -(a1 * sw + a2 * s2)
+        return 20.0 * log10(hypot(nr, ni) / max(hypot(dr, di), 1e-20))
+    }
+}
+
+object AutoEqMapper {
+    const val FS = 48_000.0
+    const val MAX_GAIN_DB = 12.0
+
+    fun responseDb(p: AutoEqProfile, f: Double, fs: Double = FS): Double =
+        p.filters.sumOf { Biquad(it.type, fs, it.fc, it.gainDb, it.q).magnitudeDb(f) }
+
+    val TEN_BANDS = doubleArrayOf(
+        31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0
+    )
+
+    data class TenBand(
+        val gainsDb: List<Double>,
+        val preampDb: Double,
+        val clipped: Boolean
+    )
+
+    fun fixedBandToTenBand(fixedBand: AutoEqProfile): TenBand {
+        var clipped = false
+        val gains = TEN_BANDS.map { center ->
+            val nearest = fixedBand.filters.minByOrNull { abs(ln(it.fc / center)) }!!
+            val g = nearest.gainDb.coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+            if (g != nearest.gainDb) clipped = true
+            g
+        }
+        return TenBand(gains, fixedBand.preampDb, clipped)
+    }
+
+    val THIRD_OCTAVE = doubleArrayOf(
+        20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 315.0,
+        400.0, 500.0, 630.0, 800.0, 1000.0, 1250.0, 1600.0, 2000.0, 2500.0, 3150.0, 4000.0,
+        5000.0, 6300.0, 8000.0, 10000.0, 12500.0, 16000.0, 20000.0
+    )
+
+    data class DpBand(
+        val cutoffHz: Float,
+        val gainDb: Float
+    )
+
+    fun toDynamicsBands(p: AutoEqProfile): List<DpBand> =
+        THIRD_OCTAVE.mapIndexed { i, center ->
+            val upper = if (i == THIRD_OCTAVE.lastIndex) 22_000.0 else center * 2.0.pow(1.0 / 6.0)
+            val g = responseDb(p, center).coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+            DpBand(upper.toFloat(), g.toFloat())
+        }
+
+    fun toNativeMillibels(
+        p: AutoEqProfile,
+        centersHz: List<Double>,
+        minMb: Int,
+        maxMb: Int
+    ): List<Int> =
+        centersHz.map { (responseDb(p, it) * 100.0).roundToInt().coerceIn(minMb, maxMb) }
+
+    fun safePreampDb(p: AutoEqProfile): Double {
+        val peak = (p.filters.map { responseDb(p, it.fc) } + 0.0).max()
+        return min(p.preampDb, -peak)
+    }
+
+    fun fromPeqFilters(filters: List<PeqFilter>, preampDb: Double = 0.0): AutoEqProfile {
+        val mapped = filters.map {
+            val ft = when (it.type.uppercase(Locale.US)) {
+                "LSC", "LS" -> FilterType.LSC
+                "HSC", "HS" -> FilterType.HSC
+                else -> FilterType.PK
+            }
+            AutoEqFilter(ft, it.fc, it.gain, it.q)
+        }
+        val autoPreamp = if (abs(preampDb) > 0.001) preampDb else {
+            val tmp = AutoEqProfile(0.0, mapped)
+            safePreampDb(tmp)
+        }
+        return AutoEqProfile(autoPreamp, mapped)
+    }
+}
 
 data class PeqFilter(
     val type: String,
     val fc: Double,
     val gain: Double,
     val q: Double
-)
+) {
+    fun toAutoEqFilter(): AutoEqFilter {
+        val ft = when (type.uppercase(Locale.US)) {
+            "LSC", "LS" -> FilterType.LSC
+            "HSC", "HS" -> FilterType.HSC
+            else -> FilterType.PK
+        }
+        return AutoEqFilter(ft, fc, gain, q)
+    }
+}
 
 object AutoEqManager {
     data class Flt(val type: String, val fc: Double, val gain: Double, val q: Double) {
@@ -80,7 +296,7 @@ object AutoEq {
         }.toList()
 
     private val PEQ_LINE = Regex(
-        """^Filter\s+\d+:\s+ON\s+(PK|PEQ|LSC|LS|HSC|HS)\s+Fc\s+([\d.]+)\s*Hz\s+Gain\s+([+-]?[\d.]+)\s*dB(?:\s+Q\s+([\d.]+))?""",
+        """^Filter\s*\d+:\s*ON\s+(PK|PEQ|LSC|LS|HSC|HS)\s+Fc\s+([\d.]+)\s*Hz\s+Gain\s+([+-]?[\d.]+)\s*dB(?:\s+Q\s+([\d.]+))?""",
         RegexOption.IGNORE_CASE
     )
 
@@ -133,63 +349,16 @@ object AutoEq {
         gain: Double,
         q: Double,
         f: Double,
-        fs: Double = 44100.0
+        fs: Double = AutoEqMapper.FS
     ): Double {
         if (abs(gain) < 1e-9 || q <= 0.0 || fc <= 0.0 || fc >= fs * 0.499) return 0.0
-        val a = 10.0.pow(gain / 40.0)
-        val w0 = 2.0 * PI * fc / fs
-        val cosW0 = cos(w0)
-        val sinW0 = sin(w0)
-        val alpha = sinW0 / (2.0 * q)
-
-        val b0: Double
-        val b1: Double
-        val b2: Double
-        val a0: Double
-        val a1: Double
-        val a2: Double
-
-        when (type.uppercase(Locale.US)) {
-            "PK", "PEQ" -> {
-                b0 = 1.0 + alpha * a
-                b1 = -2.0 * cosW0
-                b2 = 1.0 - alpha * a
-                a0 = 1.0 + alpha / a
-                a1 = -2.0 * cosW0
-                a2 = 1.0 - alpha / a
-            }
-            "LSC", "LS" -> {
-                val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
-                b0 = a * ((a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha)
-                b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cosW0)
-                b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - twoSqrtAAlpha)
-                a0 = (a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha
-                a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cosW0)
-                a2 = (a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha
-            }
-            "HSC", "HS" -> {
-                val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
-                b0 = a * ((a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha)
-                b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cosW0)
-                b2 = a * ((a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha)
-                a0 = (a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha
-                a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cosW0)
-                a2 = (a + 1.0) - (a - 1.0) * cosW0 - twoSqrtAAlpha
-            }
+        val filterType = when (type.uppercase(Locale.US)) {
+            "LSC", "LS" -> FilterType.LSC
+            "HSC", "HS" -> FilterType.HSC
+            "PK", "PEQ" -> FilterType.PK
             else -> return 0.0
         }
-
-        val w = 2.0 * PI * f / fs
-        val cw = cos(w)
-        val sw = sin(w)
-        val c2w = cos(2.0 * w)
-        val s2w = sin(2.0 * w)
-        val nr = (b0 + b1 * cw + b2 * c2w) / a0
-        val ni = (-b1 * sw - b2 * s2w) / a0
-        val dr = 1.0 + (a1 / a0) * cw + (a2 / a0) * c2w
-        val di = -(a1 / a0) * sw - (a2 / a0) * s2w
-        val mag2 = (nr * nr + ni * ni) / (dr * dr + di * di)
-        return 10.0 * log10(max(mag2, 1e-20))
+        return Biquad(filterType, fs, fc, gain, q).magnitudeDb(f)
     }
 
     fun taper(f: Double): Double = when {
@@ -201,7 +370,7 @@ object AutoEq {
     fun peqToCorrection31(
         filters: List<PeqFilter>,
         fDp: DoubleArray = Dsp.F_DP,
-        maxBoostDb: Double = 6.0,
+        maxBoostDb: Double = 12.0,
         maxCutDb: Double = -12.0
     ): DoubleArray {
         val raw = DoubleArray(fDp.size) { k ->
@@ -209,7 +378,7 @@ object AutoEq {
             filters.sumOf { biquadDb(it.type, it.fc, it.gain, it.q, f) }
         }
         return DoubleArray(fDp.size) { k ->
-            (raw[k] * taper(fDp[k])).coerceIn(maxCutDb, maxBoostDb)
+            raw[k].coerceIn(maxCutDb, maxBoostDb)
         }
     }
 
@@ -217,19 +386,16 @@ object AutoEq {
         filters: List<PeqFilter>,
         fDp: DoubleArray = Dsp.F_DP
     ): DoubleArray {
-        val raw = DoubleArray(fDp.size) { k ->
+        return DoubleArray(fDp.size) { k ->
             val f = fDp[k]
             filters.sumOf { biquadDb(it.type, it.fc, it.gain, it.q, f) }
-        }
-        return DoubleArray(fDp.size) { k ->
-            raw[k] * taper(fDp[k])
         }
     }
 
     fun graphicToCorrection31(
         pts: List<Pair<Double, Double>>,
         fDp: DoubleArray = Dsp.F_DP,
-        maxBoostDb: Double = 6.0,
+        maxBoostDb: Double = 12.0,
         maxCutDb: Double = -12.0
     ): DoubleArray {
         require(pts.size >= 2)
@@ -258,13 +424,17 @@ object AutoEq {
     fun peqToCorrection31(
         filters: List<PeqFilter>,
         strength: Double = 1.0,
-        sampleRate: Double = 44100.0,
+        sampleRate: Double = AutoEqMapper.FS,
         fullRange: Boolean = false,
         tiltBassDb: Double = 0.0,
         tiltTrebleDb: Double = 0.0
     ): DoubleArray {
-        val maxBoost = if (fullRange) 12.0 else 6.0
-        val base = peqToCorrection31(filters, maxBoostDb = maxBoost)
+        val maxBoost = if (fullRange) 12.0 else 12.0
+        val base = DoubleArray(Dsp.F_DP.size) { k ->
+            val f = Dsp.F_DP[k]
+            filters.sumOf { biquadDb(it.type, it.fc, it.gain, it.q, f, sampleRate) }
+                .coerceIn(-12.0, maxBoost)
+        }
         val tilt = computeTiltCurve31(tiltBassDb, tiltTrebleDb)
         val s = strength.coerceIn(0.0, 1.0)
         return DoubleArray(base.size) { (base[it] * s + tilt[it]).coerceIn(-15.0, 15.0) }
@@ -277,7 +447,7 @@ object AutoEq {
         tiltBassDb: Double = 0.0,
         tiltTrebleDb: Double = 0.0
     ): DoubleArray {
-        val maxBoost = if (fullRange) 12.0 else 6.0
+        val maxBoost = if (fullRange) 12.0 else 12.0
         val base = graphicToCorrection31(pts, maxBoostDb = maxBoost)
         val tilt = computeTiltCurve31(tiltBassDb, tiltTrebleDb)
         val s = strength.coerceIn(0.0, 1.0)
@@ -294,7 +464,7 @@ object AutoEq {
 
     fun computePeqTrimmedDb(
         filters: List<PeqFilter>,
-        sampleRate: Double = 44100.0,
+        sampleRate: Double = AutoEqMapper.FS,
         fullRange: Boolean = false,
         tiltBassDb: Double = 0.0,
         tiltTrebleDb: Double = 0.0
@@ -305,12 +475,8 @@ object AutoEq {
         fullRange: Boolean = false
     ): Double {
         if (filters.isEmpty()) return 0.0
-        val maxBoost = if (fullRange) 10.0 else 6.0
-        val raw = peqRawUnclamped31(filters)
-        val limited = peqToCorrection31(filters, maxBoostDb = maxBoost)
-        val maxRaw = raw.maxOrNull() ?: 0.0
-        val maxLim = limited.maxOrNull() ?: 0.0
-        return max(0.0, maxRaw - maxLim)
+        val profile = AutoEqMapper.fromPeqFilters(filters)
+        return abs(AutoEqMapper.safePreampDb(profile))
     }
 
     fun computeTiltCurve31(
@@ -347,7 +513,7 @@ object AutoEq {
                 val nearestIdx = Dsp.F_DP.indices.minByOrNull { abs(ln(Dsp.F_DP[it]) - ln(fCenter)) } ?: 0
                 correction31Db[nearestIdx] * s
             }
-            val clampedDb = meanDb.coerceIn(-12.0, 4.0)
+            val clampedDb = meanDb.coerceIn(-12.0, 12.0)
             (clampedDb * 100.0).toInt()
         }
     }
@@ -410,230 +576,61 @@ object AutoEq {
 
 class AutoEqRepo(private val context: Context) {
 
-    companion object {
-        const val COMMIT_OR_BRANCH = "master"
-        const val BASE_RAW_URL = "https://raw.githubusercontent.com/jaakkopasanen/AutoEq/$COMMIT_OR_BRANCH/results"
-        const val INDEX_URL = "$BASE_RAW_URL/INDEX.md"
-        const val MAX_PROFILE_BYTES = 64 * 1024
-        const val MAX_INDEX_BYTES = 8 * 1024 * 1024
-        const val INDEX_TTL_MS = 24L * 60L * 60L * 1000L
-        const val RATE_LIMIT_BACKOFF_MS = 60L * 60L * 1000L
+    private val repository = AutoEqRepository(context)
 
+    companion object {
         val STARTER_ENTRIES: List<IndexEntry> = listOf(
-            IndexEntry("Sennheiser HD 650", "oratory1990/over-ear/Sennheiser HD 650", "oratory1990", "HMS II.3"),
-            IndexEntry("Sennheiser HD 600", "oratory1990/over-ear/Sennheiser HD 600", "oratory1990", "HMS II.3"),
-            IndexEntry("WH-1000XM5", "oratory1990/over-ear/WH-1000XM5", "oratory1990", "HMS II.3"),
-            IndexEntry("WF-1000XM5", "oratory1990/in-ear/WF-1000XM5", "oratory1990", "HMS II.3"),
-            IndexEntry("Apple AirPods Pro 2", "crinacle/711 in-ear/Apple AirPods Pro 2", "crinacle", "711"),
-            IndexEntry("Apple AirPods Max", "oratory1990/over-ear/Apple AirPods Max", "oratory1990", "HMS II.3"),
-            IndexEntry("Samsung Galaxy Buds2 Pro", "crinacle/711 in-ear/Samsung Galaxy Buds2 Pro", "crinacle", "711"),
-            IndexEntry("Beyerdynamic DT 990 Pro", "oratory1990/over-ear/Beyerdynamic DT 990 Pro (250 Ohm)", "oratory1990", "HMS II.3"),
-            IndexEntry("Beyerdynamic DT 770 Pro (80 Ohm)", "oratory1990/over-ear/Beyerdynamic DT 770 Pro (80 Ohm)", "oratory1990", "HMS II.3"),
-            IndexEntry("HIFIMAN Sundara", "oratory1990/over-ear/HIFIMAN Sundara (2020 revised earpads)", "oratory1990", "HMS II.3"),
-            IndexEntry("HIFIMAN Edition XS", "oratory1990/over-ear/HIFIMAN Edition XS", "oratory1990", "HMS II.3"),
-            IndexEntry("Audio-Technica ATH-M50x", "oratory1990/over-ear/Audio-Technica ATH-M50x", "oratory1990", "HMS II.3"),
-            IndexEntry("Moondrop Blessing 3", "crinacle/711 in-ear/Moondrop Blessing 3", "crinacle", "711"),
-            IndexEntry("Truthear HEXA", "crinacle/711 in-ear/Truthear HEXA", "crinacle", "711"),
-            IndexEntry("AKG K371", "oratory1990/over-ear/AKG K371", "oratory1990", "HMS II.3"),
-            IndexEntry("QuietComfort Ultra", "rtings/over-ear/QuietComfort Ultra Headphones", "rtings", "HMS II.3")
+            IndexEntry("Sennheiser HD 650", "oratory1990/over-ear/Sennheiser HD 650", "oratory1990", "over-ear"),
+            IndexEntry("Sennheiser HD 600", "oratory1990/over-ear/Sennheiser HD 600", "oratory1990", "over-ear"),
+            IndexEntry("Sony WH-1000XM5", "oratory1990/over-ear/Sony WH-1000XM5", "oratory1990", "over-ear"),
+            IndexEntry("Sony WF-1000XM5", "oratory1990/in-ear/Sony WF-1000XM5", "oratory1990", "in-ear"),
+            IndexEntry("Apple AirPods Pro 2", "crinacle/Bruel & Kjaer 5128 in-ear/Apple AirPods Pro 2", "crinacle", "in-ear"),
+            IndexEntry("Apple AirPods Max", "oratory1990/over-ear/Apple AirPods Max", "oratory1990", "over-ear"),
+            IndexEntry("Samsung Galaxy Buds2 Pro", "crinacle/711 in-ear/Samsung Galaxy Buds2 Pro", "crinacle", "711 in-ear"),
+            IndexEntry("Beyerdynamic DT 990 Pro", "oratory1990/over-ear/Beyerdynamic DT 990 Pro", "oratory1990", "over-ear"),
+            IndexEntry("Beyerdynamic DT 770 Pro (80 Ohm)", "oratory1990/over-ear/Beyerdynamic DT 770 Pro (80 Ohm)", "oratory1990", "over-ear"),
+            IndexEntry("HIFIMAN Sundara", "oratory1990/over-ear/HIFIMAN Sundara", "oratory1990", "over-ear"),
+            IndexEntry("HIFIMAN Edition XS", "oratory1990/over-ear/HIFIMAN Edition XS", "oratory1990", "over-ear"),
+            IndexEntry("Audio-Technica ATH-M50x", "oratory1990/over-ear/Audio-Technica ATH-M50x", "oratory1990", "over-ear"),
+            IndexEntry("Moondrop Blessing 3", "crinacle/711 in-ear/Moondrop Blessing 3", "crinacle", "711 in-ear"),
+            IndexEntry("Truthear HEXA", "crinacle/711 in-ear/Truthear HEXA", "crinacle", "711 in-ear"),
+            IndexEntry("AKG K371", "oratory1990/over-ear/AKG K371", "oratory1990", "over-ear"),
+            IndexEntry("Bose QuietComfort Ultra Headphones", "rtings/over-ear/Bose QuietComfort Ultra Headphones", "rtings", "over-ear")
         )
     }
 
-    private val cacheDir: File by lazy {
-        File(context.filesDir, "autoeq_cache").apply { mkdirs() }
-    }
-    private val indexCacheFile: File get() = File(cacheDir, "index_entries.json")
-    private val metaPrefs by lazy {
-        context.getSharedPreferences("autoeq_repo_meta", Context.MODE_PRIVATE)
-    }
-
-    private fun isAllowedUrl(url: String): Boolean {
-        return url.startsWith("https://raw.githubusercontent.com/jaakkopasanen/AutoEq/") ||
-            url.startsWith("https://api.github.com/repos/jaakkopasanen/AutoEq/")
-    }
-
     suspend fun loadIndex(forceRefresh: Boolean = false): AutoEqFetchResult = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
-        val backoffUntil = metaPrefs.getLong("rate_limit_until_ms", 0L)
-        val lastFetch = metaPrefs.getLong("index_last_fetch_ms", 0L)
-        val cachedEntries = readCachedIndex()
-
-        if (!forceRefresh && cachedEntries.isNotEmpty() && (now - lastFetch) < INDEX_TTL_MS) {
-            return@withContext AutoEqFetchResult(entries = cachedEntries, fromCache = true)
-        }
-        if (now < backoffUntil && cachedEntries.isNotEmpty()) {
-            return@withContext AutoEqFetchResult(
-                entries = cachedEntries,
-                fromCache = true,
-                isRateLimited = true
-            )
-        }
-
-        try {
-            if (!isAllowedUrl(INDEX_URL)) {
-                return@withContext AutoEqFetchResult(
-                    entries = cachedEntries.ifEmpty { STARTER_ENTRIES },
-                    fromCache = true
+        val assetEntries = repository.loadIndex()
+        if (assetEntries.isNotEmpty()) {
+            val mapped = assetEntries.map {
+                IndexEntry(
+                    name = it.name,
+                    relPath = it.path,
+                    source = it.source,
+                    rig = it.form
                 )
             }
-            val conn = (URL(INDEX_URL).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 6000
-                readTimeout = 8000
-                setRequestProperty("User-Agent", "AudioEQ-Android/5.0")
-                val etag = metaPrefs.getString("index_etag", null)
-                if (!etag.isNullOrBlank() && cachedEntries.isNotEmpty()) {
-                    setRequestProperty("If-None-Match", etag)
-                }
-            }
-            val code = conn.responseCode
-            when (code) {
-                HttpURLConnection.HTTP_NOT_MODIFIED -> {
-                    metaPrefs.edit().putLong("index_last_fetch_ms", now).apply()
-                    return@withContext AutoEqFetchResult(entries = cachedEntries, fromCache = true)
-                }
-                403, 429 -> {
-                    metaPrefs.edit().putLong("rate_limit_until_ms", now + RATE_LIMIT_BACKOFF_MS).apply()
-                    return@withContext AutoEqFetchResult(
-                        entries = cachedEntries.ifEmpty { STARTER_ENTRIES },
-                        fromCache = true,
-                        isRateLimited = true
-                    )
-                }
-                HttpURLConnection.HTTP_OK -> {
-                    val bytes = conn.inputStream.use { input ->
-                        val out = java.io.ByteArrayOutputStream()
-                        val buf = ByteArray(8192)
-                        var total = 0
-                        while (true) {
-                            val r = input.read(buf)
-                            if (r <= 0) break
-                            total += r
-                            if (total > MAX_INDEX_BYTES) break
-                            out.write(buf, 0, r)
-                        }
-                        out.toByteArray()
-                    }
-                    val mdText = bytes.toString(Charsets.UTF_8)
-                    val parsed = AutoEq.parseIndexMd(mdText)
-                    if (parsed.isNotEmpty()) {
-                        writeCachedIndex(parsed)
-                        val newEtag = conn.getHeaderField("ETag")
-                        metaPrefs.edit()
-                            .putLong("index_last_fetch_ms", now)
-                            .putString("index_etag", newEtag)
-                            .apply()
-                        return@withContext AutoEqFetchResult(entries = parsed, fromCache = false)
-                    }
-                }
-            }
-        } catch (_: Exception) {
+            return@withContext AutoEqFetchResult(entries = mapped, fromCache = !forceRefresh)
         }
-
-        val fallback = cachedEntries.ifEmpty { STARTER_ENTRIES }
-        AutoEqFetchResult(entries = fallback, fromCache = true)
+        AutoEqFetchResult(entries = STARTER_ENTRIES, fromCache = true)
     }
 
     suspend fun fetchProfileForEntry(entry: IndexEntry): Pair<List<PeqFilter>, List<Pair<Double, Double>>> =
         withContext(Dispatchers.IO) {
-            val safeKey = entry.relPath.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            val cachedPeqFile = File(cacheDir, "${safeKey}_peq.txt")
-            if (cachedPeqFile.exists()) {
-                val txt = cachedPeqFile.readText()
-                val peq = AutoEq.parsePeq(txt)
-                if (peq.isNotEmpty()) return@withContext peq to emptyList()
-                val geq = AutoEq.parseGraphicEq(txt)
-                if (geq.isNotEmpty()) return@withContext emptyList<PeqFilter>() to geq
-            }
-
-            val encodedPath = entry.relPath.split("/").joinToString("/") { segment ->
-                java.net.URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
-            }
-            val encodedName = java.net.URLEncoder.encode(entry.name, "UTF-8").replace("+", "%20")
-
-            val candidateSuffixes = listOf(
-                "$encodedPath/$encodedName%20ParametricEQ.txt",
-                "$encodedPath/$encodedName%20FixedBandEQ.txt",
-                "$encodedPath/$encodedName%20GraphicEQ.txt"
+            val autoEntry = AutoEqEntry(
+                name = entry.name,
+                source = entry.source ?: "oratory1990",
+                form = entry.rig ?: "over-ear",
+                path = entry.relPath
             )
-
-            for (suffix in candidateSuffixes) {
-                val url = "$BASE_RAW_URL/$suffix"
-                if (!isAllowedUrl(url)) continue
-                try {
-                    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 5000
-                        readTimeout = 6000
-                        setRequestProperty("User-Agent", "AudioEQ-Android/5.0")
-                    }
-                    if (conn.responseCode == HttpURLConnection.HTTP_OK) {
-                        val bytes = conn.inputStream.use { input ->
-                            val out = java.io.ByteArrayOutputStream()
-                            val buf = ByteArray(4096)
-                            var total = 0
-                            while (true) {
-                                val r = input.read(buf)
-                                if (r <= 0) break
-                                total += r
-                                if (total > MAX_PROFILE_BYTES) break
-                                out.write(buf, 0, r)
-                            }
-                            out.toByteArray()
-                        }
-                        val text = bytes.toString(Charsets.UTF_8)
-                        val peq = AutoEq.parsePeq(text)
-                        if (peq.isNotEmpty()) {
-                            cachedPeqFile.writeText(text)
-                            return@withContext peq to emptyList()
-                        }
-                        val geq = AutoEq.parseGraphicEq(text)
-                        if (geq.isNotEmpty()) {
-                            cachedPeqFile.writeText(text)
-                            return@withContext emptyList<PeqFilter>() to geq
-                        }
-                    }
-                } catch (_: Exception) {
+            try {
+                val text = repository.fetch(autoEntry, AutoEqKind.PARAMETRIC)
+                val parsed = AutoEqParser.parseParametric(text)
+                if (parsed.filters.isNotEmpty()) {
+                    return@withContext parsed.filters.map { it.toPeqFilter() } to emptyList()
                 }
+            } catch (_: Exception) {
             }
             emptyList<PeqFilter>() to emptyList()
         }
-
-    private fun readCachedIndex(): List<IndexEntry> {
-        return try {
-            if (!indexCacheFile.exists()) return emptyList()
-            val arr = JSONArray(indexCacheFile.readText())
-            val list = ArrayList<IndexEntry>(arr.length())
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                list.add(
-                    IndexEntry(
-                        name = o.getString("name"),
-                        relPath = o.getString("relPath"),
-                        source = o.optString("source", "").ifEmpty { null },
-                        rig = o.optString("rig", "").ifEmpty { null }
-                    )
-                )
-            }
-            list
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun writeCachedIndex(entries: List<IndexEntry>) {
-        try {
-            val arr = JSONArray()
-            entries.take(6500).forEach { e ->
-                val o = JSONObject()
-                o.put("name", e.name)
-                o.put("relPath", e.relPath)
-                if (e.source != null) o.put("source", e.source)
-                if (e.rig != null) o.put("rig", e.rig)
-                arr.put(o)
-            }
-            indexCacheFile.writeText(arr.toString())
-        } catch (_: Exception) {
-        }
-    }
 }

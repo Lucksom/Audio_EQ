@@ -20,7 +20,7 @@ class EqualizerDatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "audio_eq_studio.db"
-        const val DATABASE_VERSION = 8
+        const val DATABASE_VERSION = 9
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -96,13 +96,15 @@ class EqualizerDatabaseHelper(context: Context) :
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 ieq_preset_id TEXT NOT NULL DEFAULT 'ieq_off',
                 ieq_amount INTEGER NOT NULL DEFAULT 10,
-                ieq_custom_10_json TEXT NOT NULL,
                 dialogue_enabled INTEGER NOT NULL DEFAULT 0,
                 dialogue_amount INTEGER NOT NULL DEFAULT 8,
-                dialogue_ducking INTEGER NOT NULL DEFAULT 2,
                 bass_enabled INTEGER NOT NULL DEFAULT 0,
-                bass_strength INTEGER NOT NULL DEFAULT 80,
+                bass_boost_db REAL NOT NULL DEFAULT 0.0,
                 virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                virtual_bass_strength REAL NOT NULL DEFAULT 0.5,
+                deep_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                surround_enabled INTEGER NOT NULL DEFAULT 0,
+                surround_width REAL NOT NULL DEFAULT 0.45,
                 audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
             )
             """.trimIndent()
@@ -129,48 +131,57 @@ class EqualizerDatabaseHelper(context: Context) :
             onCreate(db)
             return
         }
-        if (oldVersion < 4) {
+        if (oldVersion < 9) {
+            db.execSQL("DROP TABLE IF EXISTS movie_profile")
+            db.execSQL("DROP TABLE IF EXISTS music_profile")
+            db.execSQL("DROP TABLE IF EXISTS stereo_widening")
+            db.execSQL("DROP TABLE IF EXISTS reduce_reverb")
+            db.execSQL("DROP TABLE IF EXISTS enhancer_settings")
             db.execSQL(
                 """
                 CREATE TABLE IF NOT EXISTS enhancer_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     ieq_preset_id TEXT NOT NULL DEFAULT 'ieq_off',
                     ieq_amount INTEGER NOT NULL DEFAULT 10,
-                    ieq_custom_10_json TEXT NOT NULL,
                     dialogue_enabled INTEGER NOT NULL DEFAULT 0,
                     dialogue_amount INTEGER NOT NULL DEFAULT 8,
-                    dialogue_ducking INTEGER NOT NULL DEFAULT 2,
                     bass_enabled INTEGER NOT NULL DEFAULT 0,
-                    bass_strength INTEGER NOT NULL DEFAULT 80,
+                    bass_boost_db REAL NOT NULL DEFAULT 0.0,
                     virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                    virtual_bass_strength REAL NOT NULL DEFAULT 0.5,
+                    deep_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                    surround_enabled INTEGER NOT NULL DEFAULT 0,
+                    surround_width REAL NOT NULL DEFAULT 0.45,
                     audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
                 )
                 """.trimIndent()
             )
             seedDefaultEnhancerSettings(db)
-        }
-        if (oldVersion < 7) {
-            db.execSQL("DELETE FROM presets WHERE preset_id IN ('bass_boost', 'cinema') AND is_custom = 0")
-            db.execSQL("UPDATE route_profiles SET preamp_db = 0.0, auto_gain_enabled = 0, limiter_ceiling_db = -0.3, sub_bass_hp_hz = 0.0")
-            db.execSQL("UPDATE presets SET recommended_preamp_db = 0.0, recommended_hp_hz = 0.0 WHERE is_custom = 0")
-        }
-        if (oldVersion < 8) {
-            db.execSQL("DROP TABLE IF EXISTS movie_profile")
-            db.execSQL("DROP TABLE IF EXISTS music_profile")
-            db.execSQL("DROP TABLE IF EXISTS stereo_widening")
-            db.execSQL("DROP TABLE IF EXISTS reduce_reverb")
-            db.execSQL("UPDATE enhancer_settings SET audio_profile_id = 'profile_off' WHERE audio_profile_id IN ('profile_live_music', 'profile_movie')")
+            db.execSQL("DELETE FROM presets WHERE is_custom = 0")
+            val now = System.currentTimeMillis()
+            EqConstants.BUILT_IN_PRESETS.forEach { preset ->
+                val values = ContentValues().apply {
+                    put("preset_id", preset.id)
+                    put("name", preset.name)
+                    put("is_custom", 0)
+                    put("gains_json", floatsToJson(preset.gainsDb))
+                    put("recommended_preamp_db", preset.recommendedPreampDb)
+                    put("recommended_hp_hz", preset.recommendedHighPassHz)
+                    put("created_at", now)
+                }
+                db.insertWithOnConflict("presets", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
             createAndSeedSpecificationTables(db)
         }
     }
 
     private fun createAndSeedSpecificationTables(db: SQLiteDatabase) {
-
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS ieq_profiles (
                 band_index INTEGER PRIMARY KEY,
                 center_freq_hz INTEGER NOT NULL,
+                deep_bass_freq_hz INTEGER NOT NULL DEFAULT 0,
                 balanced_q4 INTEGER NOT NULL,
                 balanced_db REAL NOT NULL,
                 warm_q4 INTEGER NOT NULL,
@@ -182,14 +193,19 @@ class EqualizerDatabaseHelper(context: Context) :
             )
             """.trimIndent()
         )
+        try {
+            db.execSQL("ALTER TABLE ieq_profiles ADD COLUMN deep_bass_freq_hz INTEGER NOT NULL DEFAULT 0")
+        } catch (_: Exception) {
+        }
         db.execSQL("DELETE FROM ieq_profiles")
         for (i in 0 until 20) {
-            val balQ4 = EnhancerDsp.IEQ_BALANCED_Q4[i]
-            val warmQ4 = EnhancerDsp.IEQ_WARM_Q4[i]
-            val detQ4 = EnhancerDsp.IEQ_DETAILED_Q4[i]
+            val balQ4 = IeqPreset.BALANCED.targetsQ4[i]
+            val warmQ4 = IeqPreset.WARM.targetsQ4[i]
+            val detQ4 = IeqPreset.DETAILED.targetsQ4[i]
             val cv = ContentValues().apply {
                 put("band_index", i)
                 put("center_freq_hz", EnhancerDsp.IEQ_FREQS_20[i])
+                put("deep_bass_freq_hz", EnhancerDsp.IEQ_FREQS_20_DEEP_BASS[i])
                 put("balanced_q4", balQ4)
                 put("balanced_db", balQ4 / 16.0)
                 put("warm_q4", warmQ4)
@@ -220,21 +236,28 @@ class EqualizerDatabaseHelper(context: Context) :
                 "3D Audio (Spatializer & Virtualizer Engine)",
                 "Time / Z-Domain",
                 "tau=(r/c)*(theta+sin(theta)); H_c(z): beta=1-exp(-2*pi*850/fs); y_L = G_dir*L + G_cross*H_c(R[n-D]) + G_refl*S",
-                """{"r_m":0.0875,"c_mps":343,"shadow_fc_hz":850,"modes":["No effect","Near","Middle (Movie)","Far (Music/Custom)"]}"""
+                """{"r_m":0.0875,"c_mps":343,"shadow_fc_hz":850,"start_band":2,"min_freq_hz":234}"""
             ),
             arrayOf(
                 "dynamic_profile_mi",
                 "Dynamic Profile (Media Intelligence Real-Time Classifier & Steering)",
                 "Time / Frequency Domain",
-                "Gain_virt=P_movie*1.0+P_music*0.35; Target=P_music*T_bal+P_speech*T_dlg; tau_att=P_speech*20+(1-P_speech)*150; Ratio=1.0+1.5*P_surr",
-                """{"ieq_preset":2,"ieq_amount_hp":6,"ieq_amount_spk":4,"dialog_amount":4,"in_target_q4":-256,"out_target_q4":-256}"""
+                "S_dyn=1.0*P_movie*I_virt+0.35*P_music*I_eq; Target=P_music*T_bal+P_speech*T_dlg",
+                """{"ieq_preset":"ieq_balanced","ieq_amount_spk":6,"ieq_amount_bt":6,"dialog_amount":4,"peak_spk_q8":240,"peak_hp_q8":256,"volmax_spk":17,"volmax_hp":32}"""
+            ),
+            arrayOf(
+                "deep_bass_dc_shelf",
+                "Deep Bass Mode (0 Hz DC Low-Shelf & 10-Band Downward Shift)",
+                "Z-Domain Biquad Cascade",
+                "H_shelf(z): fc=35Hz, Q=0.7071; Shift: 47->0Hz, 141->47Hz, ..., 1688->1313Hz",
+                """{"fc_hz":35.0,"q":0.7071,"shift_bands":10,"volmax_spk":24,"volmax_hp":36,"volmax_bt":32}"""
             ),
             arrayOf(
                 "balanced_ieq_20band",
                 "Balance (20-Band Balanced IEQ Profile)",
                 "Log-Frequency Biquad Cascade",
                 "E(k,t)=T_bal(k)-S_bar_in(k,t); DeltaG(k,t)=clamp(mu*E(k,t), -6.0, +6.0)",
-                """{"bands":20,"q4_scale":16.0,"mu_hp":0.375,"mu_spk":0.250,"clamp_db":6.0}"""
+                """{"bands":20,"q4_scale":16.0,"mu_bt":0.375,"mu_spk":0.250,"clamp_db":6.0}"""
             )
         )
         for (row in modelRows) {
@@ -250,18 +273,19 @@ class EqualizerDatabaseHelper(context: Context) :
     }
 
     private fun seedDefaultEnhancerSettings(db: SQLiteDatabase) {
-        val defaultCustom10 = EnhancerDsp.ieqDefaultCustom10Db(IeqPreset.BALANCED)
         val cv = ContentValues().apply {
             put("id", 1)
             put("ieq_preset_id", IeqPreset.OFF.id)
             put("ieq_amount", 10)
-            put("ieq_custom_10_json", floatsToJson(defaultCustom10))
             put("dialogue_enabled", 0)
             put("dialogue_amount", 8)
-            put("dialogue_ducking", 2)
             put("bass_enabled", 0)
-            put("bass_strength", 80)
+            put("bass_boost_db", 0.0f)
             put("virtual_bass_enabled", 0)
+            put("virtual_bass_strength", 0.5f)
+            put("deep_bass_enabled", 0)
+            put("surround_enabled", 0)
+            put("surround_width", 0.45f)
             put("audio_profile_id", AudioProfile.OFF.id)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
@@ -341,9 +365,12 @@ class EqualizerDatabaseHelper(context: Context) :
         val db = readableDatabase
         db.rawQuery(
             """
-            SELECT ieq_preset_id, ieq_amount, ieq_custom_10_json,
-                   dialogue_enabled, dialogue_amount, dialogue_ducking,
-                   bass_enabled, bass_strength, virtual_bass_enabled, audio_profile_id
+            SELECT ieq_preset_id, ieq_amount,
+                   dialogue_enabled, dialogue_amount,
+                   bass_enabled, bass_boost_db,
+                   virtual_bass_enabled, virtual_bass_strength,
+                   deep_bass_enabled, surround_enabled, surround_width,
+                   audio_profile_id
             FROM enhancer_settings WHERE id = 1
             """.trimIndent(),
             null
@@ -351,31 +378,33 @@ class EqualizerDatabaseHelper(context: Context) :
             if (cursor.moveToFirst()) {
                 val preset = IeqPreset.fromId(cursor.getString(0))
                 val ieqAmt = cursor.getInt(1).coerceIn(0, 16)
-                val custom10 = jsonToFloats(cursor.getString(2), 10)
-                val dlgOn = cursor.getInt(3) == 1
-                val dlgAmt = cursor.getInt(4).coerceIn(0, 16)
-                val dlgDuck = cursor.getInt(5).coerceIn(0, 16)
-                val bassOn = cursor.getInt(6) == 1
-                val bassStr = cursor.getInt(7).coerceIn(0, 100)
-                val vBassOn = cursor.getInt(8) == 1
-                val prof = AudioProfile.fromId(cursor.getString(9))
+                val dlgOn = cursor.getInt(2) == 1
+                val dlgAmt = cursor.getInt(3).coerceIn(0, 16)
+                val bassOn = cursor.getInt(4) == 1
+                val bassDb = cursor.getFloat(5).coerceIn(0f, 6f)
+                val vBassOn = cursor.getInt(6) == 1
+                val vBassStr = cursor.getFloat(7).coerceIn(0f, 1f)
+                val deepBassOn = cursor.getInt(8) == 1
+                val surrOn = cursor.getInt(9) == 1
+                val surrWidth = cursor.getFloat(10).coerceIn(0f, 1f)
+                val prof = AudioProfile.fromId(cursor.getString(11))
                 return EnhancerConfig(
+                    profile = prof,
+                    bassEnabled = bassOn,
+                    bassBoostDb = bassDb,
+                    virtualBassEnabled = vBassOn,
+                    virtualBassStrength = vBassStr,
+                    deepBassEnabled = deepBassOn,
                     ieqPreset = preset,
                     ieqAmount = ieqAmt,
-                    ieqCustom10Db = custom10,
                     dialogueEnhancerEnabled = dlgOn,
                     dialogueAmount = dlgAmt,
-                    dialogueDucking = dlgDuck,
-                    bassEnhancerEnabled = bassOn,
-                    bassEnhancerStrength = bassStr,
-                    virtualBassEnabled = vBassOn,
-                    profile = prof
+                    surroundEnabled = surrOn,
+                    surroundWidth = surrWidth
                 )
             }
         }
-        return EnhancerConfig(
-            ieqCustom10Db = EnhancerDsp.ieqDefaultCustom10Db(IeqPreset.BALANCED)
-        )
+        return EnhancerConfig()
     }
 
     fun saveEnhancerConfig(config: EnhancerConfig) {
@@ -384,13 +413,15 @@ class EqualizerDatabaseHelper(context: Context) :
             put("id", 1)
             put("ieq_preset_id", config.ieqPreset.id)
             put("ieq_amount", config.ieqAmount.coerceIn(0, 16))
-            put("ieq_custom_10_json", floatsToJson(config.ieqCustom10Db))
             put("dialogue_enabled", if (config.dialogueEnhancerEnabled) 1 else 0)
             put("dialogue_amount", config.dialogueAmount.coerceIn(0, 16))
-            put("dialogue_ducking", config.dialogueDucking.coerceIn(0, 16))
-            put("bass_enabled", if (config.bassEnhancerEnabled) 1 else 0)
-            put("bass_strength", config.bassEnhancerStrength.coerceIn(0, 100))
+            put("bass_enabled", if (config.bassEnabled) 1 else 0)
+            put("bass_boost_db", config.bassBoostDb.coerceIn(0f, 6f))
             put("virtual_bass_enabled", if (config.virtualBassEnabled) 1 else 0)
+            put("virtual_bass_strength", config.virtualBassStrength.coerceIn(0f, 1f))
+            put("deep_bass_enabled", if (config.deepBassEnabled) 1 else 0)
+            put("surround_enabled", if (config.surroundEnabled) 1 else 0)
+            put("surround_width", config.surroundWidth.coerceIn(0f, 1f))
             put("audio_profile_id", config.profile.id)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE)

@@ -54,23 +54,23 @@ enum class EngineMode(
     LEGACY(
         id = "legacy",
         title = "Legacy Mode",
-        subtitle = "Zero-Permission · DynamicsProcessing API 28+",
-        badgeText = "Legacy (DP 31-Band)",
-        description = "Attaches to media players via ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION using 31-band PCHIP + MBC + Limiter."
+        subtitle = "Zero-Permission · Session Broadcast + DP 20/31-Band",
+        badgeText = "Legacy (Broadcast)",
+        description = "Standard sandbox mode. Attaches to media players broadcasting audio sessions using DynamicsProcessing (Deep Bass Low-Shelf, 20-Band Octave Interpolation, Endpoint Peak Limiter & Binaural Virtualizer)."
     ),
     ADB_SHIZUKU(
         id = "adb_shizuku",
         title = "ADB / Shizuku",
-        subtitle = "System-Wide AudioFlinger Discovery",
+        subtitle = "AudioFlinger Session Hook + Dynamic Sample Rate (fs)",
         badgeText = "Shizuku Global",
-        description = "Polls dumpsys media.audio_flinger every 2s to attach 31-band DSP to every active audio session."
+        description = "Uses DUMP privilege via Shizuku/ADB to discover all AudioFlinger sessions, read real hardware sample rate (44.1/48/96 kHz) for dynamic biquad recalculation, and inspect Bluetooth A2DP codecs."
     ),
     ROOT(
         id = "root",
         title = "Root Mode",
-        subtitle = "APK-Only Root Helper · Global Session 0 + Boot",
-        badgeText = "Root Global",
-        description = "Starts APK-only helper process via su for global session attachment, Bluetooth codec inspection & boot restore."
+        subtitle = "HAL Register Q4 Write + Session 0 + System EQ Guard",
+        badgeText = "Root HAL",
+        description = "Full su access: attaches to Global Mix Session 0, writes 20-band signed Q4 registers to hardware SoundFX HAL, isolates conflicting system equalizers, and manages BT Absolute Volume."
     );
 
     companion object {
@@ -99,7 +99,7 @@ enum class OutputRoute(
         label = "Phone Speaker",
         shortBadge = "Speaker",
         defaultSafeCutDb = 0.0f,
-        defaultLimiterCeilingDb = -0.3f,
+        defaultLimiterCeilingDb = -1.0f,
         defaultHighPassHz = 0f
     ),
     HEADPHONES(
@@ -107,7 +107,7 @@ enum class OutputRoute(
         label = "Wired Headphones",
         shortBadge = "Wired HP",
         defaultSafeCutDb = 0.0f,
-        defaultLimiterCeilingDb = -0.3f,
+        defaultLimiterCeilingDb = 0.0f,
         defaultHighPassHz = 0f
     ),
     BLUETOOTH(
@@ -115,7 +115,7 @@ enum class OutputRoute(
         label = "Bluetooth Audio",
         shortBadge = "Bluetooth",
         defaultSafeCutDb = 0.0f,
-        defaultLimiterCeilingDb = -0.3f,
+        defaultLimiterCeilingDb = 0.0f,
         defaultHighPassHz = 0f
     ),
     USB_DAC(
@@ -123,7 +123,7 @@ enum class OutputRoute(
         label = "USB DAC",
         shortBadge = "USB DAC",
         defaultSafeCutDb = 0.0f,
-        defaultLimiterCeilingDb = -0.3f,
+        defaultLimiterCeilingDb = 0.0f,
         defaultHighPassHz = 0f
     );
 
@@ -188,6 +188,7 @@ data class HeadphoneProfile(
     val name: String,
     val source: String,
     val rig: String = "HMS II.3",
+    val earphoneCategory: String = "Headphones",
     val peqFilters: List<PeqFilter> = emptyList(),
     val graphicPoints: List<Pair<Double, Double>> = emptyList(),
     val correction31Db: List<Float>,
@@ -219,7 +220,7 @@ data class RouteMemoryProfile(
     val preampDb: Float = 0f,
     val autoGainEnabled: Boolean = false,
     val limiterEnabled: Boolean = true,
-    val limiterCeilingDb: Float = -0.3f,
+    val limiterCeilingDb: Float = route.defaultLimiterCeilingDb,
     val subBassHighPassHz: Float = 0f,
     val iso226ContourEnabled: Boolean = false,
     val midSideWidth: Float = 1.0f,
@@ -267,6 +268,9 @@ object EqConstants {
         20000f
     )
 
+    val BAND_FREQUENCIES_10: DoubleArray = DoubleArray(10) { TEN_BAND_FREQUENCIES_HZ[it].toDouble() }
+    val BAND_FREQUENCIES_31: DoubleArray = DoubleArray(31) { THIRTY_ONE_BAND_FREQUENCIES_HZ[it].toDouble() }
+
     val HEARING_TEST_FREQUENCIES_HZ = listOf(250, 500, 1000, 2000, 4000, 8000)
     val HEARING_TEST_FREQS_HZ = HEARING_TEST_FREQUENCIES_HZ.map { it.toDouble() }
 
@@ -304,70 +308,63 @@ object EqConstants {
         EqPreset(
             id = "flat",
             name = "Flat",
-            gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-            recommendedPreampDb = 0.0f,
-            recommendedHighPassHz = 0f
-        ),
-        EqPreset(
-            id = "classical",
-            name = "Classical",
-            gainsDb = listOf(4.5f, 3.2f, 2.0f, 0.5f, -1.0f, -1.0f, 0.5f, 2.0f, 3.2f, 4.0f),
-            recommendedPreampDb = 0.0f,
-            recommendedHighPassHz = 0f
-        ),
-        EqPreset(
-            id = "jazz",
-            name = "Jazz",
-            gainsDb = listOf(3.5f, 2.5f, 1.0f, 1.5f, -1.5f, -1.5f, 0.0f, 1.5f, 2.5f, 3.5f),
+            gainsDb = listOf(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "rock",
             name = "Rock",
-            gainsDb = listOf(4.8f, 3.5f, 1.8f, -1.0f, -2.0f, -0.5f, 2.0f, 3.2f, 4.0f, 4.2f),
+            gainsDb = listOf(4.0f, 1.0f, -2.0f, -0.25f, 0.0f, -2.0f, 0.0f, -2.0f, 0.5f, 4.0f),
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
+        ),
+        EqPreset(
+            id = "jazz",
+            name = "Jazz",
+            gainsDb = listOf(0.0f, 0.0f, 0.0f, -1.0f, -1.0f, -3.0f, -0.5f, 0.0f, 0.0f, 0.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "pop",
             name = "Pop",
-            gainsDb = listOf(-1.5f, 1.0f, 3.0f, 4.0f, 3.5f, 1.5f, -0.5f, 1.0f, 2.5f, 3.0f),
+            gainsDb = listOf(-2.0f, -0.5f, -5.0f, -1.0f, 0.0f, 0.0f, -0.5f, -3.0f, -0.5f, 0.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
-            id = "pure_voice",
-            name = "Pure Voice",
-            gainsDb = listOf(-4.0f, -2.5f, -1.0f, 1.5f, 3.5f, 4.0f, 3.0f, 1.5f, -1.0f, -2.5f),
+            id = "classical",
+            name = "Classical",
+            gainsDb = listOf(0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 3.0f, 1.0f, 6.0f, 2.0f, 6.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
-            id = "power_bass",
-            name = "Power Bass",
-            gainsDb = listOf(6.0f, 5.0f, 3.5f, 1.5f, 0.0f, -0.5f, -1.0f, 0.0f, 1.0f, 1.5f),
+            id = "hip_hop",
+            name = "Hip-Hop",
+            gainsDb = listOf(3.0f, 0.0f, -3.0f, -0.5f, -0.5f, -3.0f, -0.5f, 0.0f, 0.0f, 2.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
-            id = "balanced_deep",
-            name = "Balanced Deep",
-            gainsDb = listOf(3.8f, 3.0f, 1.5f, 0.0f, -0.5f, 0.5f, 1.5f, 2.2f, 2.8f, 2.5f),
+            id = "blues",
+            name = "Blues",
+            gainsDb = listOf(2.0f, 2.0f, -6.0f, -2.0f, 3.0f, 1.0f, 0.0f, 1.0f, 0.0f, 2.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
-            id = "vocal_clarity",
-            name = "Vocal Clarity",
-            gainsDb = listOf(-3.5f, -2.0f, 0.0f, 2.0f, 3.8f, 4.2f, 3.2f, 1.8f, 0.5f, -1.0f),
+            id = "electronic",
+            name = "Electronic",
+            gainsDb = listOf(3.0f, 1.0f, -1.0f, 0.0f, -0.5f, -3.0f, -0.5f, 0.0f, 0.0f, 0.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
-            id = "percussion",
-            name = "Percussion",
-            gainsDb = listOf(3.0f, 2.0f, -0.5f, -1.5f, 0.0f, 1.0f, 2.5f, 4.2f, 4.8f, 4.5f),
+            id = "metal",
+            name = "Metal",
+            gainsDb = listOf(2.0f, 0.0f, 0.0f, -1.25f, -1.0f, -4.0f, 0.0f, 0.0f, 0.0f, 0.0f),
             recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         )
@@ -378,6 +375,7 @@ object EqConstants {
         name: String,
         source: String,
         rig: String,
+        category: String,
         filters: List<PeqFilter>
     ): HeadphoneProfile {
         val corr31 = AutoEq.peqToCorrection31(filters).map { it.toFloat() }
@@ -386,6 +384,7 @@ object EqConstants {
             name = name,
             source = source,
             rig = rig,
+            earphoneCategory = category,
             peqFilters = filters,
             correction31Db = corr31,
             isApproximation = false,
@@ -396,37 +395,96 @@ object EqConstants {
     val BUILT_IN_HEADPHONE_PROFILES: List<HeadphoneProfile> = listOf(
         HeadphoneProfile(
             id = "none",
-            name = "Off (No Headphone Profile)",
+            name = "Off (No Profile)",
             source = "Bypass",
             rig = "None",
+            earphoneCategory = "All",
             peqFilters = emptyList(),
             correction31Db = List(31) { 0f }
         ),
         buildProfileFromPeq(
-            id = "hd650",
-            name = "Sennheiser HD 650",
-            source = "oratory1990",
-            rig = "GRAS 43AG-7",
+            id = "blessing_3",
+            name = "Moondrop Blessing 3",
+            source = "crinacle",
+            rig = "711 In-Ear",
+            category = "Earphones",
             filters = listOf(
-                PeqFilter("LSC", 105.0, 5.5, 0.70),
-                PeqFilter("PK", 210.0, -2.1, 1.30),
-                PeqFilter("PK", 1050.0, 1.0, 1.80),
-                PeqFilter("PK", 3300.0, 2.3, 2.10),
-                PeqFilter("HSC", 10000.0, 1.8, 0.70)
+                PeqFilter("LSC", 105.0, 2.8, 0.70),
+                PeqFilter("PK", 210.0, -1.2, 1.40),
+                PeqFilter("PK", 1450.0, -1.4, 1.80),
+                PeqFilter("PK", 3100.0, -2.2, 2.10),
+                PeqFilter("PK", 5800.0, -2.5, 2.60),
+                PeqFilter("HSC", 10000.0, 1.2, 0.70)
             )
         ),
         buildProfileFromPeq(
-            id = "wh1000xm5",
-            name = "WH-1000XM5",
-            source = "oratory1990",
-            rig = "GRAS 43AG-7",
+            id = "truthear_hexa",
+            name = "Truthear HEXA",
+            source = "crinacle",
+            rig = "711 In-Ear",
+            category = "Earphones",
             filters = listOf(
-                PeqFilter("LSC", 105.0, -3.8, 0.70),
-                PeqFilter("PK", 195.0, -4.6, 1.10),
-                PeqFilter("PK", 460.0, 2.4, 1.40),
-                PeqFilter("PK", 1550.0, 3.2, 1.60),
-                PeqFilter("PK", 3100.0, 2.5, 2.00),
-                PeqFilter("HSC", 8500.0, 2.6, 0.70)
+                PeqFilter("LSC", 105.0, 2.2, 0.70),
+                PeqFilter("PK", 185.0, -1.5, 1.30),
+                PeqFilter("PK", 1300.0, -0.9, 1.90),
+                PeqFilter("PK", 3000.0, -1.6, 2.20),
+                PeqFilter("HSC", 9500.0, -1.8, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "ie600",
+            name = "Sennheiser IE 600",
+            source = "oratory1990",
+            rig = "GRAS 43AC",
+            category = "Earphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.8, 0.70),
+                PeqFilter("PK", 220.0, -1.4, 1.20),
+                PeqFilter("PK", 1600.0, 2.1, 1.60),
+                PeqFilter("PK", 3200.0, -1.9, 2.00),
+                PeqFilter("PK", 6800.0, -3.8, 2.90)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "7hz_timeless",
+            name = "7Hz Timeless",
+            source = "crinacle",
+            rig = "711 In-Ear",
+            category = "Earphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.5, 0.70),
+                PeqFilter("PK", 190.0, -2.1, 1.30),
+                PeqFilter("PK", 2100.0, -2.4, 1.90),
+                PeqFilter("PK", 4200.0, 1.8, 2.20),
+                PeqFilter("PK", 8000.0, -3.2, 2.80)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "shure_se215",
+            name = "Shure SE215",
+            source = "oratory1990",
+            rig = "GRAS 43AC",
+            category = "Earphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -2.5, 0.70),
+                PeqFilter("PK", 240.0, -3.4, 1.20),
+                PeqFilter("PK", 2700.0, 4.2, 1.60),
+                PeqFilter("PK", 5200.0, 3.8, 2.00),
+                PeqFilter("HSC", 9000.0, 4.5, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "kz_zs10_pro",
+            name = "KZ ZS10 Pro",
+            source = "crinacle",
+            rig = "711 In-Ear",
+            category = "Earphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -2.8, 0.70),
+                PeqFilter("PK", 180.0, -3.1, 1.20),
+                PeqFilter("PK", 1100.0, 2.2, 1.50),
+                PeqFilter("PK", 2400.0, -3.5, 2.00),
+                PeqFilter("PK", 4800.0, -4.2, 2.50)
             )
         ),
         buildProfileFromPeq(
@@ -434,6 +492,7 @@ object EqConstants {
             name = "Apple AirPods Pro 2",
             source = "crinacle",
             rig = "Bruel & Kjaer 5128",
+            category = "Earbuds",
             filters = listOf(
                 PeqFilter("LSC", 105.0, 1.4, 0.70),
                 PeqFilter("PK", 230.0, -1.6, 1.50),
@@ -444,10 +503,25 @@ object EqConstants {
             )
         ),
         buildProfileFromPeq(
+            id = "wf1000xm5",
+            name = "WF-1000XM5",
+            source = "oratory1990",
+            rig = "HMS II.3",
+            category = "Earbuds",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.9, 0.70),
+                PeqFilter("PK", 240.0, -2.5, 1.30),
+                PeqFilter("PK", 1400.0, 1.6, 1.70),
+                PeqFilter("PK", 3200.0, 2.8, 1.90),
+                PeqFilter("HSC", 9000.0, 2.4, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
             id = "galaxy_buds2_pro",
             name = "Samsung Galaxy Buds2 Pro",
             source = "crinacle",
             rig = "GRAS 43AG-7",
+            category = "Earbuds",
             filters = listOf(
                 PeqFilter("LSC", 105.0, -1.6, 0.70),
                 PeqFilter("PK", 320.0, 1.2, 1.40),
@@ -457,10 +531,95 @@ object EqConstants {
             )
         ),
         buildProfileFromPeq(
+            id = "nothing_ear_2",
+            name = "Nothing Ear (2)",
+            source = "crinacle",
+            rig = "711 In-Ear",
+            category = "Earbuds",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -2.1, 0.70),
+                PeqFilter("PK", 215.0, -2.4, 1.30),
+                PeqFilter("PK", 1500.0, 1.8, 1.60),
+                PeqFilter("PK", 3400.0, -2.2, 2.00),
+                PeqFilter("PK", 6500.0, -2.6, 2.50)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "qc_ultra_earbuds",
+            name = "QuietComfort Ultra Earbuds",
+            source = "rtings",
+            rig = "HMS II.3",
+            category = "Earbuds",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -2.9, 0.70),
+                PeqFilter("PK", 250.0, -2.2, 1.40),
+                PeqFilter("PK", 1800.0, 1.5, 1.80),
+                PeqFilter("PK", 3600.0, 2.1, 2.10),
+                PeqFilter("HSC", 8500.0, -1.5, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "hd650",
+            name = "Sennheiser HD 650",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, 5.5, 0.70),
+                PeqFilter("PK", 210.0, -2.1, 1.30),
+                PeqFilter("PK", 1050.0, 1.0, 1.80),
+                PeqFilter("PK", 3300.0, 2.3, 2.10),
+                PeqFilter("HSC", 10000.0, 1.8, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "hd600",
+            name = "Sennheiser HD 600",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, 5.8, 0.70),
+                PeqFilter("PK", 220.0, -1.6, 1.30),
+                PeqFilter("PK", 3200.0, -2.0, 2.20),
+                PeqFilter("HSC", 10000.0, 1.4, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "wh1000xm5",
+            name = "WH-1000XM5",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -3.8, 0.70),
+                PeqFilter("PK", 195.0, -4.6, 1.10),
+                PeqFilter("PK", 460.0, 2.4, 1.40),
+                PeqFilter("PK", 1550.0, 3.2, 1.60),
+                PeqFilter("PK", 3100.0, 2.5, 2.00),
+                PeqFilter("HSC", 8500.0, 2.6, 0.70)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "airpods_max",
+            name = "Apple AirPods Max",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.8, 0.70),
+                PeqFilter("PK", 310.0, 2.6, 1.40),
+                PeqFilter("PK", 1150.0, -1.9, 1.80),
+                PeqFilter("PK", 2350.0, 3.8, 1.90),
+                PeqFilter("PK", 4600.0, 2.4, 2.20)
+            )
+        ),
+        buildProfileFromPeq(
             id = "dt990_pro",
             name = "Beyerdynamic DT 990 Pro",
             source = "oratory1990",
             rig = "GRAS 43AG-7",
+            category = "Headphones",
             filters = listOf(
                 PeqFilter("LSC", 85.0, 4.8, 0.70),
                 PeqFilter("PK", 180.0, -2.8, 1.20),
@@ -471,16 +630,83 @@ object EqConstants {
             )
         ),
         buildProfileFromPeq(
+            id = "dt770_pro",
+            name = "Beyerdynamic DT 770 Pro (80 Ohm)",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 100.0, -1.5, 0.70),
+                PeqFilter("PK", 210.0, 3.4, 1.40),
+                PeqFilter("PK", 3600.0, -2.5, 2.20),
+                PeqFilter("PK", 8400.0, -5.4, 3.00)
+            )
+        ),
+        buildProfileFromPeq(
             id = "sundara",
             name = "HIFIMAN Sundara",
             source = "oratory1990",
             rig = "GRAS 43AG-7",
+            category = "Headphones",
             filters = listOf(
                 PeqFilter("LSC", 105.0, 5.2, 0.70),
                 PeqFilter("PK", 950.0, -1.4, 2.10),
                 PeqFilter("PK", 1950.0, 3.0, 1.80),
                 PeqFilter("PK", 4600.0, -1.8, 2.60),
                 PeqFilter("PK", 7200.0, -2.5, 3.00)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "edition_xs",
+            name = "HIFIMAN Edition XS",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, 4.5, 0.70),
+                PeqFilter("PK", 1750.0, 3.2, 1.70),
+                PeqFilter("PK", 3800.0, -1.8, 2.40),
+                PeqFilter("PK", 8200.0, -3.0, 3.00)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "ath_m50x",
+            name = "Audio-Technica ATH-M50x",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.2, 0.70),
+                PeqFilter("PK", 155.0, -3.5, 1.30),
+                PeqFilter("PK", 360.0, 2.8, 1.50),
+                PeqFilter("PK", 1900.0, 2.1, 1.90),
+                PeqFilter("PK", 4500.0, -2.6, 2.40)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "akg_k371",
+            name = "AKG K371",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -1.0, 0.70),
+                PeqFilter("PK", 380.0, 1.4, 1.50),
+                PeqFilter("PK", 2100.0, 1.8, 1.90),
+                PeqFilter("PK", 3900.0, -2.4, 2.30)
+            )
+        ),
+        buildProfileFromPeq(
+            id = "qc_ultra",
+            name = "QuietComfort Ultra",
+            source = "rtings",
+            rig = "HMS II.3",
+            category = "Headphones",
+            filters = listOf(
+                PeqFilter("LSC", 105.0, -3.2, 0.70),
+                PeqFilter("PK", 220.0, -2.6, 1.30),
+                PeqFilter("PK", 1600.0, 1.8, 1.70),
+                PeqFilter("PK", 3400.0, 2.2, 2.00)
             )
         )
     )

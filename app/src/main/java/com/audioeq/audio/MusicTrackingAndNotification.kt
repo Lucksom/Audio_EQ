@@ -364,19 +364,16 @@ object MusicAppTracker {
         val results = LinkedHashMap<Int, TrackedMusicSession>()
         val pm = context.packageManager
 
-        // 1. Parse AudioPlaybackConfiguration lines from `dumpsys audio`
         if (!audioDumpsys.isNullOrBlank()) {
             val lines = audioDumpsys.lineSequence()
             for (line in lines) {
                 if (!line.contains("sessionId", ignoreCase = true) && !line.contains("session:", ignoreCase = true)) {
                     continue
                 }
-                // Ignore released or stopped players if state is explicitly paused/stopped/released
                 val lowerLine = line.lowercase(Locale.US)
                 if (lowerLine.contains("state:released") || lowerLine.contains("state:stopped") || lowerLine.contains("state:idle")) {
                     continue
                 }
-                // Check usage if present
                 if (lowerLine.contains("usage=") &&
                     !lowerLine.contains("usage=usage_media") &&
                     !lowerLine.contains("usage=1 ")
@@ -417,9 +414,7 @@ object MusicAppTracker {
             }
         }
 
-        // 2. Parse AudioFlinger active tracks from `dumpsys media.audio_flinger`
         if (!flingerDumpsys.isNullOrBlank()) {
-            // AudioFlinger tabular rows often contain sessionId + uid/client
             val lines = flingerDumpsys.lineSequence()
             for (line in lines) {
                 val sidMatch = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
@@ -498,7 +493,6 @@ class EqMediaNotificationListenerService : NotificationListenerService() {
             val mediaPkgs = LinkedHashSet<String>()
             var anyPlaying = false
 
-            // 1. Inspect active notifications for MediaStyle / mediaSession / transport
             val activeNotifs = runCatching { activeNotifications }.getOrNull() ?: emptyArray()
             for (sbn in activeNotifs) {
                 val pkg = sbn.packageName ?: continue
@@ -521,7 +515,6 @@ class EqMediaNotificationListenerService : NotificationListenerService() {
                 }
             }
 
-            // 2. Also query MediaSessionManager active controllers when NotificationListener is bound
             runCatching {
                 val msm = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
                 val component = ComponentName(this, EqMediaNotificationListenerService::class.java)

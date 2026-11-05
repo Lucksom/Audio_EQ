@@ -143,6 +143,34 @@ object ShizukuManager {
         return match?.groupValues?.get(1)?.trim() ?: "Bluetooth (A2DP)"
     }
 
+    fun readHardwareSampleRateHz(): Int {
+        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger") ?: return 48000
+        val regex = Regex("""Sample rate\s*[:=]?\s*(\d{4,6})\s*Hz""", RegexOption.IGNORE_CASE)
+        val parsed = regex.find(flingerOutput)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return when (parsed) {
+            44100, 48000, 88200, 96000, 192000 -> parsed
+            else -> 48000
+        }
+    }
+
+    fun resolveSystemEqConflictIfRoot(): Boolean {
+        if (!rootAccessVerified) return false
+        return try {
+            val process = Runtime.getRuntime().exec(
+                arrayOf("su", "-c", "setprop persist.audio.system_eq.enable false")
+            )
+            val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                false
+            } else {
+                process.exitValue() == 0
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     @Volatile private var service: IUserService? = null
     @Volatile private var pending: CompletableDeferred<IUserService>? = null
 

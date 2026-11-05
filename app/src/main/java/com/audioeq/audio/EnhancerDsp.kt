@@ -1,148 +1,164 @@
 package com.audioeq.audio
 
+import com.audioeq.model.EqConstants
+import com.audioeq.model.OutputRoute
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.log10
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToInt
-
-object EqMath {
-    fun formatCustomizedSoundStepsCsv(offsets: List<Float>): String {
-        return offsets.joinToString(", ") { db ->
-            val step = ((db + 42f) / 3f).roundToInt().coerceIn(0, 28)
-            step.toString()
-        }
-    }
-}
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class IeqPreset(
     val id: String,
-    val index: Int,
-    val title: String,
+    val label: String,
     val subtitle: String,
-    val defaultAmount: Int
+    val targetsQ4: IntArray
 ) {
-    OFF("ieq_off", 0, "No effect", "Bypass intelligent target matching", 0),
-    DETAILED("ieq_detailed", 1, "Detailed", "Open treble & upper-mid clarity", 10),
-    BALANCED("ieq_balanced", 2, "Balanced", "Reference target matching", 6),
-    WARM("ieq_warm", 3, "Warm", "Rich low-mid body & smooth highs", 10),
-    CUSTOM("ieq_custom", 4, "Customized", "User-editable 10-band target curve", 10);
+    OFF(
+        id = "ieq_off",
+        label = "Off",
+        subtitle = "Bypass spectral target steering",
+        targetsQ4 = IntArray(20) { 0 }
+    ),
+    DETAILED(
+        id = "ieq_detailed",
+        label = "Detailed",
+        subtitle = "Treble clarity & vocal presence (+4.88 dB @ 4.7 kHz)",
+        targetsQ4 = intArrayOf(
+            -50, 5, 19, 25, 29, 44, 52, 57, 56, 56,
+            61, 69, 77, 78, 72, 74, 48, 22, -2, -59
+        )
+    ),
+    WARM(
+        id = "ieq_warm",
+        label = "Warm",
+        subtitle = "Rich low-mids & smooth upper-harmonic roll-off",
+        targetsQ4 = intArrayOf(
+            -38, 17, 32, 41, 46, 55, 57, 62, 65, 68,
+            69, 69, 60, 49, 34, 24, -12, -55, -102, -162
+        )
+    ),
+    BALANCED(
+        id = "ieq_balanced",
+        label = "Balanced",
+        subtitle = "Equal-loudness contour across bass, mids & air",
+        targetsQ4 = intArrayOf(
+            -65, 0, 14, 29, 39, 52, 56, 61, 67, 70,
+            73, 74, 67, 61, 52, 49, 20, -14, -50, -108
+        )
+    );
 
     companion object {
-        fun fromId(id: String?): IeqPreset = entries.find { it.id == id } ?: OFF
-        fun fromIndex(idx: Int): IeqPreset = entries.find { it.index == idx } ?: OFF
+        fun fromId(id: String): IeqPreset = entries.firstOrNull { it.id == id } ?: OFF
     }
 }
 
 enum class AudioProfile(
-    val id: String = "profile_off",
-    val title: String = "Off",
-    val subtitle: String = "Direct",
-    val badgeLabel: String = "Direct"
+    val id: String,
+    val label: String,
+    val subtitle: String,
+    val badge: String
 ) {
-    OFF("profile_off", "Off", "Direct", "Direct");
-
-    val virtualizerStrengthPermille: Int get() = 0
-    val bassBoostStrengthPermille: Int get() = 0
+    OFF(
+        id = "profile_off",
+        label = "Off",
+        subtitle = "Manual module control without profile presets",
+        badge = "Manual"
+    ),
+    DYNAMIC(
+        id = "profile_dynamic",
+        label = "Dynamic",
+        subtitle = "Adaptive real-time Movie & Music steering across output routes",
+        badge = "Adaptive"
+    ),
+    VIDEO(
+        id = "profile_video",
+        label = "Video",
+        subtitle = "Binaural 3D surround, Detailed IEQ & speech clarity boost",
+        badge = "Cinema 3D"
+    ),
+    MUSIC(
+        id = "profile_music",
+        label = "Music",
+        subtitle = "Direct acoustic fidelity on Speaker/Headphones; Balanced IEQ on Bluetooth",
+        badge = "Hi-Fi"
+    ),
+    DEEP_BASS(
+        id = "profile_deep_bass",
+        label = "Deep Bass",
+        subtitle = "0 Hz low-shelf filter (35 Hz cutoff) + 10-band downward shift (47→0 Hz)",
+        badge = "0Hz Shelf"
+    ),
+    VOICE(
+        id = "profile_voice",
+        label = "Voice",
+        subtitle = "Vocal formant emphasis & Detailed IEQ clarity",
+        badge = "Vocal"
+    );
 
     companion object {
-        fun fromId(id: String?): AudioProfile = OFF
+        fun fromId(id: String): AudioProfile = entries.firstOrNull { it.id == id } ?: OFF
     }
 }
 
-enum class DialogueMode {
-    DEFAULT,
-    BROADCAST,
-    CINEMA,
-    PODCAST
+data class EndpointProfileSpec(
+    val profile: AudioProfile,
+    val route: OutputRoute,
+    val endpointName: String,
+    val ieqEnabled: Boolean,
+    val ieqPreset: IeqPreset,
+    val ieqAmount: Int,
+    val deEnabled: Boolean,
+    val deAmount: Int,
+    val virtualBassAuto: Boolean,
+    val peakQ8: Int,
+    val peakCeilingDb: Float,
+    val volmaxQ4: Int,
+    val volmaxMakeupDb: Float,
+    val virtualizerEnabled: Boolean,
+    val virtualizerModeLabel: String,
+    val virtualizerWidth: Float,
+    val deepBassActive: Boolean
+) {
+    val mu: Float get() = (ieqAmount.coerceIn(0, 16) / 16.0f)
+    val deBoostDb: Float get() = if (deEnabled) (deAmount.coerceIn(0, 16) / 16.0f) * 10.0f else 0.0f
 }
 
-enum class BassContour {
-    NATURAL,
-    TIGHT_PUNCH,
-    SUB_BASS,
-    CLUB
-}
+data class DeepBassShiftBand(
+    val bandIndex: Int,
+    val normalHz: Int,
+    val deepBassHz: Int,
+    val acousticEffect: String
+)
 
 data class EnhancerConfig(
+    val profile: AudioProfile = AudioProfile.OFF,
+    val bassEnabled: Boolean = false,
+    val bassBoostDb: Float = 0.0f,
+    val virtualBassEnabled: Boolean = false,
+    val virtualBassStrength: Float = 0.5f,
+    val deepBassEnabled: Boolean = false,
     val ieqPreset: IeqPreset = IeqPreset.OFF,
     val ieqAmount: Int = 10,
-    val ieqIntensity: Float = 1.0f,
-    val ieqCustom10Db: List<Float> = List(10) { 0f },
     val dialogueEnhancerEnabled: Boolean = false,
     val dialogueAmount: Int = 8,
-    val dialogueGain: Int = 4,
-    val dialogueDucking: Int = 2,
-    val dialogueMode: DialogueMode = DialogueMode.BROADCAST,
-    val bassEnhancerEnabled: Boolean = false,
-    val bassEnhancerStrength: Int = 80,
-    val bassBoostLevel: Int = 0,
-    val bassContour: BassContour = BassContour.TIGHT_PUNCH,
-    val virtualBassEnabled: Boolean = false,
-    val virtualBassStrength: Int = 75,
-    val profile: AudioProfile = AudioProfile.OFF
+    val surroundEnabled: Boolean = false,
+    val surroundWidth: Float = 0.45f
 ) {
-    val bassBoostStrengthPermille: Short
-        get() = (bassEnhancerStrength.coerceIn(0, 100) * 10).toShort()
-
-    fun isAnyActive(): Boolean =
-        ieqPreset != IeqPreset.OFF ||
-            dialogueEnhancerEnabled ||
-            bassEnhancerEnabled ||
-            virtualBassEnabled
-}
-
-object EnhancerMath {
-    val IEQ_FREQS_20: IntArray get() = EnhancerDsp.IEQ_FREQS_20
-    val UUID_BASS_BOOST_MZ: java.util.UUID = java.util.UUID.fromString("42b10000-0010-0000-0000-0002a5d5c51b")
-
-    const val BASS_MAX_31_DB = 6.0f
-    const val BASS_MAX_62_DB = 6.0f
-    const val BASS_MAX_125_DB = 4.5f
-    const val BASS_MAX_250_DB = 3.0f
-
-    fun bassEnhancerBandBoostDb(
-        bandIndex: Int,
-        strengthPct: Int,
-        virtualBassEnabled: Boolean
-    ): Float {
-        val factor = (strengthPct.coerceIn(0, 100) / 100.0f)
-        if (factor <= 0f) return 0f
-        val raw = when (bandIndex) {
-            0 -> BASS_MAX_31_DB * factor
-            1 -> BASS_MAX_62_DB * factor
-            2 -> (BASS_MAX_125_DB + (if (virtualBassEnabled) 1.5f else 0.0f)) * factor
-            3 -> (BASS_MAX_250_DB + (if (virtualBassEnabled) 1.2f else 0.0f)) * factor
-            else -> 0f
-        }
-        return raw.coerceIn(0f, 6.0f)
-    }
-
-    fun computeTotalEnhancerOffsetDb(frequencyHz: Double, config: EnhancerConfig): Float {
-        val combined31 = EnhancerDsp.computeCombinedEnhancer31(config)
-        var offset = EnhancerDsp.interpolate31AtFrequency(combined31, frequencyHz).toFloat()
-        if (config.dialogueEnhancerEnabled && config.dialogueAmount == 0 && config.dialogueGain > 0 && frequencyHz in 1000.0..4000.0) {
-            offset += (config.dialogueGain * 0.75f).coerceAtLeast(2.2f)
-        }
-        return offset
-    }
-
-    fun computeCurveWithAutoHeadroom(
-        freqs: List<Float>,
-        baseGains: List<Float>,
-        config: EnhancerConfig,
-        ceilingDb: Float
-    ): Pair<List<Float>, Float> {
-        val raw = freqs.indices.map { i ->
-            val f = freqs[i].toDouble()
-            val off = computeTotalEnhancerOffsetDb(f, config)
-            baseGains.getOrElse(i) { 0f } + off
-        }
-        val maxVal = raw.maxOrNull() ?: 0f
-        val trim = if (maxVal > ceilingDb) maxVal - ceilingDb else 0f
-        val effective = raw.map { (it - trim).coerceIn(-15.0f, ceilingDb + 0.5f) }
-        return effective to trim
+    fun isAnyActive(): Boolean {
+        return profile != AudioProfile.OFF ||
+            bassEnabled && bassBoostDb > 0.05f ||
+            virtualBassEnabled && virtualBassStrength > 0.02f ||
+            deepBassEnabled ||
+            ieqPreset != IeqPreset.OFF && ieqAmount > 0 ||
+            dialogueEnhancerEnabled && dialogueAmount > 0 ||
+            surroundEnabled && surroundWidth > 0.02f
     }
 }
 
@@ -153,273 +169,719 @@ object EnhancerDsp {
         2250, 3000, 3750, 4688, 5813, 7125, 9000, 11250, 13875, 19688
     )
 
-    val IEQ_DETAILED_Q4: IntArray = intArrayOf(
-        150, 142, 188, 216, 189, 195, 202, 199, 210, 225,
-        230, 236, 235, 235, 214, 165, 112, 49, -24, -217
+    val IEQ_FREQS_20_DEEP_BASS: IntArray = intArrayOf(
+        0, 47, 141, 234, 328, 469, 656, 844, 1031, 1313,
+        2250, 3000, 3750, 4688, 5813, 7125, 9000, 11250, 13875, 19688
     )
 
-    val IEQ_BALANCED_Q4: IntArray = intArrayOf(
-        157, 167, 218, 218, 203, 188, 192, 192, 205, 213,
-        218, 209, 193, 159, 134, 85, 20, -63, -161, -378
+    val DEEP_BASS_SHIFT_BANDS: List<DeepBassShiftBand> = listOf(
+        DeepBassShiftBand(0, 47, 0, "0 Hz low-shelf filter (35 Hz cutoff) with zero sub-bass roll-off"),
+        DeepBassShiftBand(1, 141, 47, "Reclaims 47 Hz deep sub-bass punch"),
+        DeepBassShiftBand(2, 234, 141, "Shifts upper-bass warmth into 141 Hz"),
+        DeepBassShiftBand(3, 328, 234, "Concentrates low-mid body into 234 Hz"),
+        DeepBassShiftBand(4, 469, 328, "Tightens 328 Hz lower-harmonic fundamental"),
+        DeepBassShiftBand(5, 656, 469, "Increases sub-500 Hz filter density"),
+        DeepBassShiftBand(6, 844, 656, "Smooths transition between bass and vocal fundamentals"),
+        DeepBassShiftBand(7, 1031, 844, "Refines lower midrange articulation"),
+        DeepBassShiftBand(8, 1313, 1031, "Anchors 1 kHz reference pivot"),
+        DeepBassShiftBand(9, 1688, 1313, "Bridges lower-mids to fixed 2250 Hz upper-mid band")
     )
 
-    val IEQ_WARM_Q4: IntArray = intArrayOf(
-        114, 146, 183, 169, 170, 128, 103, 90, 98, 126,
-        127, 140, 96, 85, 80, 66, 38, -32, -132, -275
-    )
+    fun resolveEndpointSpec(
+        profile: AudioProfile,
+        route: OutputRoute,
+        deepBassOverride: Boolean = false
+    ): EndpointProfileSpec {
+        val isSpeaker = (route == OutputRoute.SPEAKER)
+        val isBluetooth = (route == OutputRoute.BLUETOOTH)
+        val endpointName = when (route) {
+            OutputRoute.SPEAKER -> "Internal Stereo Speakers"
+            OutputRoute.HEADPHONES -> "Wired Headphones / Line-Out"
+            OutputRoute.USB_DAC -> "USB Hi-Res DAC / Line-Out"
+            OutputRoute.BLUETOOTH -> "Bluetooth Audio (A2DP)"
+        }
+        val deepBassActive = deepBassOverride || profile == AudioProfile.DEEP_BASS
 
-    val IEQ_OFF_Q4: IntArray = IntArray(20) { 0 }
-
-    const val VIRTUAL_BASS_SRC_LOW_HZ: Double = 30.0
-    const val VIRTUAL_BASS_SRC_HIGH_HZ: Double = 90.0
-    const val VIRTUAL_BASS_DST_LOW_HZ: Double = 75.0
-    const val VIRTUAL_BASS_DST_HIGH_HZ: Double = 270.0
-    const val VIRTUAL_BASS_OVERALL_GAIN_DB: Double = -4.5
-    const val VIRTUAL_BASS_SLOPE_GAIN_DB_PER_OCT: Double = -1.5
-    val VIRTUAL_BASS_MIX_FREQS_HZ: Pair<Double, Double> = 90.0 to 469.0
-    val VIRTUAL_BASS_HARMONIC_GAINS_DB: Triple<Double, Double, Double> = Triple(-2.0, -9.0, -12.0)
-
-    fun ieqTarget20Db(
-        preset: IeqPreset,
-        custom10Db: List<Float> = List(10) { 0f }
-    ): DoubleArray {
-        return when (preset) {
-            IeqPreset.OFF -> DoubleArray(20) { 0.0 }
-            IeqPreset.DETAILED -> DoubleArray(20) { i -> IEQ_DETAILED_Q4[i] / 16.0 }
-            IeqPreset.BALANCED -> DoubleArray(20) { i -> IEQ_BALANCED_Q4[i] / 16.0 }
-            IeqPreset.WARM -> DoubleArray(20) { i -> IEQ_WARM_Q4[i] / 16.0 }
-            IeqPreset.CUSTOM -> {
-                val safe10 = DoubleArray(10) { idx ->
-                    custom10Db.getOrElse(idx) { 0f }.toDouble().coerceIn(-12.0, 12.0)
+        return when (profile) {
+            AudioProfile.DYNAMIC -> {
+                when {
+                    isSpeaker -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.BALANCED,
+                        ieqAmount = 6,
+                        deEnabled = false,
+                        deAmount = 4,
+                        virtualBassAuto = true,
+                        peakQ8 = 240,
+                        peakCeilingDb = -1.0f,
+                        volmaxQ4 = 17,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Adaptive Speaker Stage (>234 Hz)",
+                        virtualizerWidth = 0.40f,
+                        deepBassActive = deepBassActive
+                    )
+                    isBluetooth -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.BALANCED,
+                        ieqAmount = 6,
+                        deEnabled = true,
+                        deAmount = 4,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (A2DP Phase Coherence)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    else -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.BALANCED,
+                        ieqAmount = 6,
+                        deEnabled = false,
+                        deAmount = 4,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Adaptive Binaural Stage (1.0·Movie + 0.35·Music)",
+                        virtualizerWidth = 0.50f,
+                        deepBassActive = deepBassActive
+                    )
                 }
-                interpolate10To20Bands(safe10)
+            }
+
+            AudioProfile.VIDEO -> {
+                when {
+                    isSpeaker -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.DETAILED,
+                        ieqAmount = 12,
+                        deEnabled = true,
+                        deAmount = 5,
+                        virtualBassAuto = true,
+                        peakQ8 = 241,
+                        peakCeilingDb = -1.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.5f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Cinema Wide Crosstalk Canceller (>234 Hz)",
+                        virtualizerWidth = 0.65f,
+                        deepBassActive = deepBassActive
+                    )
+                    isBluetooth -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.OFF,
+                        ieqAmount = 0,
+                        deEnabled = true,
+                        deAmount = 4,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Zero-Latency A2DP Cinema Direct",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    else -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.DETAILED,
+                        ieqAmount = 13,
+                        deEnabled = true,
+                        deAmount = 4,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 48,
+                        volmaxMakeupDb = 3.0f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Mode 2 Binaural HRTF (±35°, τ=0.302 ms / 14 samples)",
+                        virtualizerWidth = 0.72f,
+                        deepBassActive = deepBassActive
+                    )
+                }
+            }
+
+            AudioProfile.MUSIC -> {
+                when {
+                    isSpeaker -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.OFF,
+                        ieqAmount = 4,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = true,
+                        peakQ8 = 241,
+                        peakCeilingDb = -1.0f,
+                        volmaxQ4 = 16,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (Pure Stereo Reference)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    isBluetooth -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.BALANCED,
+                        ieqAmount = 6,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (Pure Stereo Reference)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    else -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.OFF,
+                        ieqAmount = 0,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Direct GEQ Acoustic Path",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                }
+            }
+
+            AudioProfile.DEEP_BASS -> {
+                when {
+                    isSpeaker -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.WARM,
+                        ieqAmount = 8,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = true,
+                        peakQ8 = 240,
+                        peakCeilingDb = -1.0f,
+                        volmaxQ4 = 24,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Sub-Bass Phase Locked (<234 Hz Mono Anchored)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = true
+                    )
+                    isBluetooth -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.BALANCED,
+                        ieqAmount = 8,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.5f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "0 Hz Low-Shelf (fc=35 Hz, Q=0.7071)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = true
+                    )
+                    else -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.WARM,
+                        ieqAmount = 7,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 36,
+                        volmaxMakeupDb = 0.75f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "0 Hz Low-Shelf (fc=35 Hz, Q=0.7071)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = true
+                    )
+                }
+            }
+
+            AudioProfile.VOICE -> {
+                when {
+                    isSpeaker -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.DETAILED,
+                        ieqAmount = 13,
+                        deEnabled = true,
+                        deAmount = 9,
+                        virtualBassAuto = true,
+                        peakQ8 = 241,
+                        peakCeilingDb = -1.0f,
+                        volmaxQ4 = 48,
+                        volmaxMakeupDb = 3.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (Center-Channel Vocal Focus)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    isBluetooth -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = false,
+                        ieqPreset = IeqPreset.OFF,
+                        ieqAmount = 0,
+                        deEnabled = false,
+                        deAmount = 0,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (Direct BT Speech)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                    else -> EndpointProfileSpec(
+                        profile = profile,
+                        route = route,
+                        endpointName = endpointName,
+                        ieqEnabled = true,
+                        ieqPreset = IeqPreset.DETAILED,
+                        ieqAmount = 9,
+                        deEnabled = true,
+                        deAmount = 7,
+                        virtualBassAuto = false,
+                        peakQ8 = 256,
+                        peakCeilingDb = 0.0f,
+                        volmaxQ4 = 32,
+                        volmaxMakeupDb = 0.0f,
+                        virtualizerEnabled = false,
+                        virtualizerModeLabel = "Bypassed (Zero Phase Smearing)",
+                        virtualizerWidth = 0.0f,
+                        deepBassActive = deepBassActive
+                    )
+                }
+            }
+
+            AudioProfile.OFF -> EndpointProfileSpec(
+                profile = AudioProfile.OFF,
+                route = route,
+                endpointName = endpointName,
+                ieqEnabled = false,
+                ieqPreset = IeqPreset.OFF,
+                ieqAmount = 0,
+                deEnabled = false,
+                deAmount = 0,
+                virtualBassAuto = isSpeaker,
+                peakQ8 = if (isSpeaker) 240 else 256,
+                peakCeilingDb = if (isSpeaker) -1.0f else 0.0f,
+                volmaxQ4 = 32,
+                volmaxMakeupDb = 0.0f,
+                virtualizerEnabled = false,
+                virtualizerModeLabel = "Manual Module Control",
+                virtualizerWidth = 0.0f,
+                deepBassActive = deepBassOverride
+            )
+        }
+    }
+
+    fun applyProfileForRoute(
+        current: EnhancerConfig,
+        profile: AudioProfile,
+        route: OutputRoute
+    ): EnhancerConfig {
+        if (profile == AudioProfile.OFF) {
+            return current.copy(profile = AudioProfile.OFF)
+        }
+        val spec = resolveEndpointSpec(profile, route, current.deepBassEnabled)
+        return current.copy(
+            profile = profile,
+            deepBassEnabled = if (profile == AudioProfile.DEEP_BASS) true else current.deepBassEnabled,
+            bassEnabled = bassEnabledKeepOrDefault(current, profile),
+            bassBoostDb = when {
+                profile == AudioProfile.DEEP_BASS && current.bassBoostDb < 3.5f -> 4.5f
+                profile == AudioProfile.VIDEO && current.bassBoostDb < 2.0f -> 2.5f
+                profile == AudioProfile.DYNAMIC && current.bassBoostDb < 1.5f -> 2.0f
+                else -> current.bassBoostDb
+            },
+            virtualBassEnabled = spec.virtualBassAuto,
+            virtualBassStrength = if (spec.virtualBassAuto) max(current.virtualBassStrength, 0.55f) else current.virtualBassStrength,
+            ieqPreset = if (spec.ieqEnabled) spec.ieqPreset else IeqPreset.OFF,
+            ieqAmount = if (spec.ieqEnabled) spec.ieqAmount else current.ieqAmount,
+            dialogueEnhancerEnabled = spec.deEnabled,
+            dialogueAmount = if (spec.deEnabled) spec.deAmount else current.dialogueAmount,
+            surroundEnabled = spec.virtualizerEnabled,
+            surroundWidth = if (spec.virtualizerEnabled) spec.virtualizerWidth else current.surroundWidth
+        )
+    }
+
+    private fun bassEnabledKeepOrDefault(current: EnhancerConfig, profile: AudioProfile): Boolean {
+        return when (profile) {
+            AudioProfile.DEEP_BASS, AudioProfile.VIDEO, AudioProfile.DYNAMIC -> true
+            AudioProfile.VOICE -> false
+            else -> current.bassEnabled
+        }
+    }
+
+    fun interpolate10To20Logarithmic(gains10: DoubleArray, deepBass: Boolean = false): DoubleArray {
+        val freqs10 = EqConstants.BAND_FREQUENCIES_10
+        val freqs20 = if (deepBass) IEQ_FREQS_20_DEEP_BASS else IEQ_FREQS_20
+        return DoubleArray(20) { k ->
+            val fk = freqs20[k]
+            when {
+                fk <= freqs10.first() -> gains10.firstOrNull() ?: 0.0
+                fk >= freqs10.last() -> gains10.lastOrNull() ?: 0.0
+                else -> {
+                    var idx = 0
+                    for (i in 0 until freqs10.size - 1) {
+                        if (fk >= freqs10[i] && fk <= freqs10[i + 1]) {
+                            idx = i
+                            break
+                        }
+                    }
+                    val fLow = freqs10[idx]
+                    val fHigh = freqs10[idx + 1]
+                    val wk = ln(fk / fLow) / ln(fHigh / fLow)
+                    (1.0 - wk) * gains10[idx] + wk * gains10[idx + 1]
+                }
             }
         }
     }
 
-    fun ieqDefaultCustom10Db(preset: IeqPreset = IeqPreset.BALANCED): List<Float> {
-        val basePreset = if (preset == IeqPreset.OFF || preset == IeqPreset.CUSTOM) {
-            IeqPreset.BALANCED
+    fun toQ4RegisterValues(gains20Db: DoubleArray): IntArray {
+        return IntArray(gains20Db.size) { k ->
+            (gains20Db[k] * 16.0).roundToInt()
+        }
+    }
+
+    fun computeDeepBassCurve31(
+        config: EnhancerConfig,
+        sampleRate: Double = 48000.0
+    ): DoubleArray {
+        val result = DoubleArray(31)
+        val active = config.deepBassEnabled || config.profile == AudioProfile.DEEP_BASS
+        if (!active) return result
+
+        val shelfGainDb = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
+            config.bassBoostDb.toDouble().coerceIn(2.5, 6.0)
         } else {
-            preset
+            4.5
         }
-        val target20 = ieqTarget20Db(basePreset)
-        val freqs20 = DoubleArray(20) { IEQ_FREQS_20[it].toDouble() }
-        return Dsp.F_USER.map { fUser ->
-            val v = logLinearInterp(freqs20, target20, fUser)
-            ((v * 10.0).roundToInt() / 10.0).toFloat()
+
+        val fc = 35.0
+        val q = 0.70710678
+        val a = 10.0.pow(shelfGainDb / 40.0)
+        val omegaC = 2.0 * PI * fc / sampleRate
+        val cosW = cos(omegaC)
+        val sinW = sin(omegaC)
+        val alpha = sinW / (2.0 * q)
+        val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
+
+        val b0 = a * ((a + 1.0) - (a - 1.0) * cosW + twoSqrtAAlpha)
+        val b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cosW)
+        val b2 = a * ((a + 1.0) - (a - 1.0) * cosW - twoSqrtAAlpha)
+        val a0 = (a + 1.0) + (a - 1.0) * cosW + twoSqrtAAlpha
+        val a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cosW)
+        val a2 = (a + 1.0) + (a - 1.0) * cosW - twoSqrtAAlpha
+
+        val nb0 = b0 / a0
+        val nb1 = b1 / a0
+        val nb2 = b2 / a0
+        val na1 = a1 / a0
+        val na2 = a2 / a0
+
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+        for (i in 0 until 31) {
+            val f = freqs[i]
+            val w = 2.0 * PI * f / sampleRate
+            val cos1 = cos(w)
+            val sin1 = sin(w)
+            val cos2 = cos(2.0 * w)
+            val sin2 = sin(2.0 * w)
+
+            val numRe = nb0 + nb1 * cos1 + nb2 * cos2
+            val numIm = -(nb1 * sin1 + nb2 * sin2)
+            val denRe = 1.0 + na1 * cos1 + na2 * cos2
+            val denIm = -(na1 * sin1 + na2 * sin2)
+
+            val magSq = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm).coerceAtLeast(1e-12)
+            val dcShelfDb = 10.0 * log10(magSq.coerceAtLeast(1e-12))
+
+            val logShiftReinforcement = 1.35 * exp(-0.5 * (ln(f / 47.0) / 0.55).pow(2.0))
+            result[i] = (dcShelfDb + logShiftReinforcement).coerceIn(0.0, 6.5)
         }
+        return result
     }
 
-    private fun interpolate10To20Bands(gains10: DoubleArray): DoubleArray {
-        val out = DoubleArray(20)
-        for (i in 0 until 20) {
-            out[i] = logLinearInterp(Dsp.F_USER, gains10, IEQ_FREQS_20[i].toDouble())
-        }
-        return out
-    }
+    fun computeNormal47HzPeaking31(
+        gainDb: Double = 4.5,
+        sampleRate: Double = 48000.0
+    ): DoubleArray {
+        val f0 = 47.0
+        val q = 1.414
+        val a = 10.0.pow(gainDb / 40.0)
+        val w0 = 2.0 * PI * f0 / sampleRate
+        val cosW0 = cos(w0)
+        val sinW0 = sin(w0)
+        val alpha = sinW0 / (2.0 * q)
 
-    private fun logLinearInterp(xsHz: DoubleArray, ysDb: DoubleArray, fHz: Double): Double {
-        if (fHz <= xsHz.first()) return ysDb.first()
-        if (fHz >= xsHz.last()) return ysDb.last()
-        val logF = ln(fHz)
-        var idx = 0
-        for (i in 0 until xsHz.size - 1) {
-            if (fHz >= xsHz[i] && fHz <= xsHz[i + 1]) {
-                idx = i
-                break
-            }
-        }
-        val x0 = ln(xsHz[idx])
-        val x1 = ln(xsHz[idx + 1])
-        val t = if (abs(x1 - x0) < 1e-9) 0.0 else ((logF - x0) / (x1 - x0)).coerceIn(0.0, 1.0)
-        return ysDb[idx] + t * (ysDb[idx + 1] - ysDb[idx])
-    }
+        val b0 = 1.0 + alpha * a
+        val b1 = -2.0 * cosW0
+        val b2 = 1.0 - alpha * a
+        val a0 = 1.0 + alpha / a
+        val a1 = -2.0 * cosW0
+        val a2 = 1.0 - alpha / a
 
-    fun computeIeq31(config: EnhancerConfig): DoubleArray {
-        if (config.ieqPreset == IeqPreset.OFF) return DoubleArray(Dsp.F_DP.size)
-        val alpha = (config.ieqAmount.coerceIn(0, 16) / 16.0)
-        if (alpha <= 1e-6) return DoubleArray(Dsp.F_DP.size)
+        val nb0 = b0 / a0
+        val nb1 = b1 / a0
+        val nb2 = b2 / a0
+        val na1 = a1 / a0
+        val na2 = a2 / a0
 
-        val target20 = ieqTarget20Db(config.ieqPreset, config.ieqCustom10Db)
-        val freqs20 = DoubleArray(20) { IEQ_FREQS_20[it].toDouble() }
-        if (config.ieqPreset == IeqPreset.CUSTOM) {
-            return DoubleArray(Dsp.F_DP.size) { k ->
-                val f = Dsp.F_DP[k]
-                (alpha * logLinearInterp(freqs20, target20, f)).coerceIn(-6.0, 6.0)
-            }
-        }
-        val meanTarget = target20.takeMidrangeMean()
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+        return DoubleArray(31) { i ->
+            val w = 2.0 * PI * freqs[i] / sampleRate
+            val cos1 = cos(w)
+            val sin1 = sin(w)
+            val cos2 = cos(2.0 * w)
+            val sin2 = sin(2.0 * w)
 
-        return DoubleArray(Dsp.F_DP.size) { k ->
-            val f = Dsp.F_DP[k]
-            val raw = logLinearInterp(freqs20, target20, f) - meanTarget * 0.65
-            (alpha * raw).coerceIn(-0.8, 6.0)
-        }
-    }
+            val numRe = nb0 + nb1 * cos1 + nb2 * cos2
+            val numIm = -(nb1 * sin1 + nb2 * sin2)
+            val denRe = 1.0 + na1 * cos1 + na2 * cos2
+            val denIm = -(na1 * sin1 + na2 * sin2)
 
-    private fun DoubleArray.takeMidrangeMean(): Double {
-        var sum = 0.0
-        val start = 3
-        val end = 13
-        for (i in start..end) sum += this[i]
-        return sum / (end - start + 1)
-    }
-
-    fun computeDialogueEnhancer31(config: EnhancerConfig): DoubleArray {
-        if (!config.dialogueEnhancerEnabled) return DoubleArray(Dsp.F_DP.size)
-        val amt = (config.dialogueAmount.coerceIn(0, 16) / 16.0)
-        if (amt <= 1e-6) return DoubleArray(Dsp.F_DP.size)
-        val duck = (config.dialogueDucking.coerceIn(0, 16) / 16.0)
-
-        val fSibilance = 7500.0
-        val sibilanceCutDb = -0.8 * amt
-        val mudCutDb = -1.2 * amt * duck
-
-        return DoubleArray(Dsp.F_DP.size) { k ->
-            val f = Dsp.F_DP[k]
-            val bodyPeak = AutoEq.biquadDb(
-                type = "PK",
-                fc = 1100.0,
-                gain = 4.2 * amt,
-                q = 1.05,
-                f = f
-            )
-            val presencePeak = AutoEq.biquadDb(
-                type = "PK",
-                fc = 2550.0,
-                gain = 6.0 * amt,
-                q = 1.10,
-                f = f
-            )
-            val chestClarity = AutoEq.biquadDb(
-                type = "PK",
-                fc = 420.0,
-                gain = 2.2 * amt,
-                q = 1.25,
-                f = f
-            )
-            val lowMudCut = AutoEq.biquadDb(
-                type = "LSC",
-                fc = 130.0,
-                gain = mudCutDb,
-                q = 0.72,
-                f = f
-            )
-            val deEsser = AutoEq.biquadDb(
-                type = "PK",
-                fc = fSibilance,
-                gain = sibilanceCutDb,
-                q = 2.4,
-                f = f
-            )
-            (bodyPeak + presencePeak + chestClarity + lowMudCut + deEsser).coerceIn(-2.0, 8.5)
+            val magSq = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm).coerceAtLeast(1e-12)
+            10.0 * log10(magSq.coerceAtLeast(1e-12))
         }
     }
 
     fun computeBassEnhancer31(config: EnhancerConfig): DoubleArray {
-        if (!config.bassEnhancerEnabled) return DoubleArray(Dsp.F_DP.size)
-        val bass10 = DoubleArray(10) { i ->
-            EnhancerMath.bassEnhancerBandBoostDb(
-                bandIndex = i,
-                strengthPct = config.bassEnhancerStrength,
-                virtualBassEnabled = false
-            ).toDouble()
+        val result = DoubleArray(31)
+        if (!config.bassEnabled || config.bassBoostDb <= 0.05f) return result
+
+        val boost = config.bassBoostDb.toDouble().coerceIn(0.0, 6.0)
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+
+        for (i in 0 until 31) {
+            val f = freqs[i]
+            val ratio = f / 95.0
+            val shelfGain = (boost * 0.62) / sqrt(1.0 + ratio.pow(4.0))
+
+            val logDist62 = ln(f / 62.0)
+            val punchBell = (boost * 0.38) * exp(-0.5 * (logDist62 / 0.42).pow(2.0))
+
+            val logDist140 = ln(f / 140.0)
+            val warmthBell = (boost * 0.10) * exp(-0.5 * (logDist140 / 0.32).pow(2.0))
+
+            result[i] = (shelfGain + punchBell + warmthBell).coerceIn(0.0, 6.0)
         }
-        val curve31 = Dsp.renderCurve(bass10)
-        return DoubleArray(Dsp.F_DP.size) { k ->
-            curve31[k].coerceIn(0.0, 6.0)
-        }
+        return result
     }
 
     fun computeVirtualBass31(config: EnhancerConfig): DoubleArray {
-        if (!config.virtualBassEnabled) return DoubleArray(Dsp.F_DP.size)
-        val strength = config.virtualBassStrength.coerceIn(0, 100) / 100.0
-        return DoubleArray(Dsp.F_DP.size) { k ->
-            val f = Dsp.F_DP[k]
-            val h2 = AutoEq.biquadDb(type = "PK", fc = 80.0, gain = 4.5 * strength, q = 1.35, f = f)
-            val h3 = AutoEq.biquadDb(type = "PK", fc = 125.0, gain = 3.6 * strength, q = 1.25, f = f)
-            val h4 = AutoEq.biquadDb(type = "PK", fc = 200.0, gain = 2.0 * strength, q = 1.45, f = f)
-            (h2 + h3 + h4).coerceIn(0.0, 5.5)
+        val result = DoubleArray(31)
+        if (!config.virtualBassEnabled || config.virtualBassStrength <= 0.02f) return result
+
+        val strength = config.virtualBassStrength.toDouble().coerceIn(0.0, 1.0)
+        val maxHarmonicDb = strength * 6.5
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+
+        for (i in 0 until 31) {
+            val f = freqs[i]
+            val subAnchor = (maxHarmonicDb * 0.35) / sqrt(1.0 + (f / 55.0).pow(4.0))
+            val h2 = (maxHarmonicDb * 0.85) * exp(-0.5 * (ln(f / 110.0) / 0.28).pow(2.0))
+            val h3 = (maxHarmonicDb * 0.55) * exp(-0.5 * (ln(f / 165.0) / 0.24).pow(2.0))
+            val h4 = (maxHarmonicDb * 0.28) * exp(-0.5 * (ln(f / 220.0) / 0.20).pow(2.0))
+            val mudDip = -(maxHarmonicDb * 0.18) * exp(-0.5 * (ln(f / 340.0) / 0.22).pow(2.0))
+
+            result[i] = subAnchor + h2 + h3 + h4 + mudDip
+        }
+        return result
+    }
+
+    fun computeIeq31(config: EnhancerConfig): DoubleArray {
+        val result = DoubleArray(31)
+        if (config.ieqPreset == IeqPreset.OFF || config.ieqAmount <= 0) return result
+
+        val mu = (config.ieqAmount.coerceIn(0, 16) / 16.0)
+        val targetsQ4 = config.ieqPreset.targetsQ4
+        val refMidDb = ((targetsQ4[7] + targetsQ4[8] + targetsQ4[9] + targetsQ4[10]) / 4.0) / 16.0
+        val targetsDb = DoubleArray(20) { b ->
+            ((targetsQ4[b] / 16.0) - refMidDb) * mu
+        }
+
+        val ieqFreqs = if (config.deepBassEnabled || config.profile == AudioProfile.DEEP_BASS) {
+            IEQ_FREQS_20_DEEP_BASS
+        } else {
+            IEQ_FREQS_20
+        }
+
+        val freqs31 = EqConstants.BAND_FREQUENCIES_31
+        for (i in 0 until 31) {
+            val f = freqs31[i]
+            result[i] = interpolateLog20(f, targetsDb, ieqFreqs)
+        }
+        return result
+    }
+
+    fun computeDialogueEnhancer31(config: EnhancerConfig): DoubleArray {
+        val result = DoubleArray(31)
+        if (!config.dialogueEnhancerEnabled || config.dialogueAmount <= 0) return result
+
+        val amountNorm = config.dialogueAmount.coerceIn(0, 16) / 16.0
+        val maxBoostDb = amountNorm * 10.0
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+
+        for (i in 0 until 31) {
+            val f = freqs[i]
+            val logDistFormant = ln(f / 2100.0)
+            val formantBoost = maxBoostDb * exp(-0.5 * (logDistFormant / 0.58).pow(2.0))
+
+            val logDistChest = ln(f / 550.0)
+            val chestPresence = (maxBoostDb * 0.22) * exp(-0.5 * (logDistChest / 0.35).pow(2.0))
+
+            val logDistMud = ln(f / 220.0)
+            val mudUnmask = -(maxBoostDb * 0.25) * exp(-0.5 * (logDistMud / 0.38).pow(2.0))
+
+            result[i] = formantBoost + chestPresence + mudUnmask
+        }
+        return result
+    }
+
+    fun computeSurroundContour31(config: EnhancerConfig, isSpeaker: Boolean = false): DoubleArray {
+        val result = DoubleArray(31)
+        if (!config.surroundEnabled || config.surroundWidth <= 0.02f) return result
+
+        val w = config.surroundWidth.toDouble().coerceIn(0.0, 1.0)
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+
+        for (i in 0 until 31) {
+            val f = freqs[i]
+            if (f <= 234.0) {
+                result[i] = 0.0
+                continue
+            }
+            val sidePresence = (w * 2.2) * exp(-0.5 * (ln(f / 2800.0) / 0.42).pow(2.0))
+            val pinnaNotch = -(w * 1.4) * exp(-0.5 * (ln(f / 7200.0) / 0.22).pow(2.0))
+            val airShelf = (w * 2.6) / sqrt(1.0 + (9500.0 / f).pow(4.0))
+            val speakerDispersion = if (isSpeaker) {
+                (w * 1.1) * exp(-0.5 * (ln(f / 1600.0) / 0.35).pow(2.0))
+            } else 0.0
+
+            result[i] = sidePresence + pinnaNotch + airShelf + speakerDispersion
+        }
+        return result
+    }
+
+    fun computeCombinedEnhancer31(
+        config: EnhancerConfig,
+        isSpeaker: Boolean = false,
+        sampleRate: Double = 48000.0
+    ): DoubleArray {
+        val deepBass = computeDeepBassCurve31(config, sampleRate)
+        val bass = computeBassEnhancer31(config)
+        val virtBass = computeVirtualBass31(config)
+        val ieq = computeIeq31(config)
+        val de = computeDialogueEnhancer31(config)
+        val surr = computeSurroundContour31(config, isSpeaker)
+
+        return DoubleArray(31) { i ->
+            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + de[i] + surr[i]).coerceIn(-12.0, 14.0)
         }
     }
 
-    fun interpolate31AtFrequency(curve31: DoubleArray, fHz: Double): Double {
-        return logLinearInterp(Dsp.F_DP, curve31, fHz)
-    }
+    private fun interpolateLog20(freqHz: Double, gains20: DoubleArray, freqs20: IntArray = IEQ_FREQS_20): Double {
+        val firstFreq = freqs20.first().coerceAtLeast(20).toDouble()
+        if (freqHz <= firstFreq) return gains20.first()
+        if (freqHz >= freqs20.last()) return gains20.last()
 
-    fun computeCombinedEnhancer31(config: EnhancerConfig, isSpeaker: Boolean = false): DoubleArray {
-        val ieq = computeIeq31(config)
-        val dlg = computeDialogueEnhancer31(config)
-        val bass = computeBassEnhancer31(config)
-        val vBass = computeVirtualBass31(config)
-        return DoubleArray(Dsp.F_DP.size) { k ->
-            val sum = ieq[k] + dlg[k] + bass[k] + vBass[k]
-            if (sum > 6.0) {
-                (6.0 + (sum - 6.0) * 0.35).coerceAtMost(8.0)
-            } else {
-                sum.coerceIn(-12.0, 6.0)
+        val logF = ln(freqHz.coerceAtLeast(20.0))
+        for (b in 0 until freqs20.size - 1) {
+            val f0 = freqs20[b].coerceAtLeast(20).toDouble()
+            val f1 = freqs20[b + 1].coerceAtLeast(21).toDouble()
+            if (freqHz >= f0 && freqHz <= f1) {
+                val l0 = ln(f0)
+                val l1 = ln(f1)
+                val t = if (abs(l1 - l0) < 1e-6) 0.0 else (logF - l0) / (l1 - l0)
+                return gains20[b] + t * (gains20[b + 1] - gains20[b])
             }
         }
+        return 0.0
     }
 
-    fun buildHardwareDax96BytePayload(
+    val UUID_BASS_BOOST_MZ: java.util.UUID =
+        java.util.UUID.fromString("0634f220-ddd4-11db-a0fc-0002a5d5c51b")
+    val UUID_HARDWARE_EFFECT: java.util.UUID =
+        java.util.UUID.fromString("46d279d0-9e77-11e4-89d3-0002a5d5c51b")
+
+    fun buildHardwareRegisterPayload(
         gains20Q4: IntArray,
-        ieqPresetIndex: Int = 1
+        ieqPresetIndex: Int,
+        deepBassEnabled: Boolean = false,
+        peakQ8: Int = 256,
+        volmaxQ4: Int = 32
     ): ByteArray {
-        val buf = ByteArray(96)
-        fun writeInt32LE(offset: Int, value: Int) {
-            buf[offset] = (value and 0xFF).toByte()
-            buf[offset + 1] = ((value ushr 8) and 0xFF).toByte()
-            buf[offset + 2] = ((value ushr 16) and 0xFF).toByte()
-            buf[offset + 3] = ((value ushr 24) and 0xFF).toByte()
-        }
-        writeInt32LE(0, 1)
-        writeInt32LE(4, 20)
-        writeInt32LE(8, ieqPresetIndex)
-        writeInt32LE(12, 0)
+        val buf = java.nio.ByteBuffer.allocate(96).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.putInt(ieqPresetIndex)
+        buf.putInt(if (deepBassEnabled) 1 else 0)
+        buf.putInt(peakQ8)
+        buf.putInt(volmaxQ4)
         for (i in 0 until 20) {
-            val g = gains20Q4.getOrElse(i) { 0 }.coerceIn(-960, 384)
-            writeInt32LE(16 + i * 4, g)
+            buf.putInt(gains20Q4.getOrElse(i) { 0 })
         }
-        return buf
+        return buf.array()
     }
 }
 
-class HarmonicVirtualBassGenerator(sampleRate: Int = 48000) {
-    private var lpState1 = 0.0
-    private var lpState2 = 0.0
-    private var hpState = 0.0
-    private var prevSample = 0.0
-
-    private val alphaLp = 1.0 - exp(-2.0 * PI * 90.0 / sampleRate.toDouble())
-    private val alphaHp = exp(-2.0 * PI * 30.0 / sampleRate.toDouble())
-
-    private val gH2 = 10.0.pow(EnhancerDsp.VIRTUAL_BASS_HARMONIC_GAINS_DB.first / 20.0)
-    private val gH3 = 10.0.pow(EnhancerDsp.VIRTUAL_BASS_HARMONIC_GAINS_DB.second / 20.0)
-    private val gH4 = 10.0.pow(EnhancerDsp.VIRTUAL_BASS_HARMONIC_GAINS_DB.third / 20.0)
-    private val overallGain = 10.0.pow(EnhancerDsp.VIRTUAL_BASS_OVERALL_GAIN_DB / 20.0)
-
-    fun processSample(x: Float): Float {
-        val d = x.toDouble()
-        hpState = alphaHp * (hpState + d - prevSample)
-        prevSample = d
-        lpState1 += alphaLp * (hpState - lpState1)
-        lpState2 += alphaLp * (lpState1 - lpState2)
-
-        val sub = lpState2.coerceIn(-1.0, 1.0)
-        val h2 = (2.0 * sub * sub - 1.0) * abs(sub)
-        val h3 = 4.0 * sub * sub * sub - 3.0 * sub
-        val h4 = (8.0 * sub.pow(4.0) - 8.0 * sub * sub + 1.0) * abs(sub)
-
-        val harmonics = overallGain * (gH2 * h2 + gH3 * h3 + gH4 * h4)
-        return (d + 0.35 * harmonics).coerceIn(-0.99, 0.99).toFloat()
-    }
-
-    fun reset() {
-        lpState1 = 0.0
-        lpState2 = 0.0
-        hpState = 0.0
-        prevSample = 0.0
-    }
-}
+typealias EnhancerMath = EnhancerDsp
