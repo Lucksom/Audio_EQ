@@ -59,16 +59,21 @@ import com.audioeq.model.HeadphoneProfile
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PresetConfig
+import com.audioeq.shizuku.ShizukuState
 import kotlin.math.roundToInt
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 import com.audioeq.ui.theme.SpaceGroteskFontFamily
+import java.util.Locale
 
 @Composable
 fun TopBarHeader(
     masterEnabled: Boolean,
     activePresetName: String,
     selectedMode: EngineMode,
+    shizukuState: ShizukuState = ShizukuState.NOT_RUNNING,
+    shizukuPrivilege: String = "",
+    rootAvailable: Boolean = false,
     onToggleMaster: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -91,8 +96,30 @@ fun TopBarHeader(
         label = "masterCorner"
     )
 
+    val modeStatusLabel = when (selectedMode) {
+        EngineMode.ROOT -> when {
+            rootAvailable && shizukuPrivilege.contains("Shizuku", ignoreCase = true) -> "Shizuku (Su)"
+            rootAvailable -> "Root (Su)"
+            shizukuState == ShizukuState.NEEDS_PERMISSION -> "Root (Grant)"
+            else -> "Root"
+        }
+        EngineMode.ADB_SHIZUKU -> when {
+            shizukuState == ShizukuState.READY && shizukuPrivilege.contains("uid=0") -> "Shizuku (Su)"
+            shizukuState == ShizukuState.READY -> "Shizuku (Shell)"
+            shizukuState == ShizukuState.NEEDS_PERMISSION || shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Shizuku (Grant)"
+            else -> "ADB / Shizuku"
+        }
+        EngineMode.LEGACY -> "Legacy"
+    }
+
+    val isModePrivilegeReady = when (selectedMode) {
+        EngineMode.ROOT -> rootAvailable
+        EngineMode.ADB_SHIZUKU -> shizukuState == ShizukuState.READY
+        EngineMode.LEGACY -> true
+    }
+
     val subtitleText = if (masterEnabled) {
-        "$activePresetName · ${selectedMode.shortTitle}"
+        "$activePresetName · $modeStatusLabel"
     } else {
         "All features are off"
     }
@@ -211,21 +238,25 @@ fun TopBarHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val dotColor = if (masterEnabled) Color(0xFF6DD58C) else palette.outline
+                val dotColor = when {
+                    !masterEnabled -> palette.outline
+                    isModePrivilegeReady -> Color(0xFF6DD58C)
+                    else -> Color(0xFFFFB74D)
+                }
                 Box(
                     modifier = Modifier
                         .size(8.dp)
                         .shadow(
                             elevation = if (masterEnabled) 6.dp else 0.dp,
                             shape = CircleShape,
-                            ambientColor = Color(0xFF6DD58C),
-                            spotColor = Color(0xFF6DD58C)
+                            ambientColor = dotColor,
+                            spotColor = dotColor
                         )
                         .clip(CircleShape)
                         .background(dotColor)
                 )
                 Text(
-                    text = selectedMode.shortTitle,
+                    text = modeStatusLabel,
                     fontFamily = SpaceGroteskFontFamily,
                     fontWeight = FontWeight.Medium,
                     fontSize = 12.sp,
@@ -472,34 +503,53 @@ fun AutoEqCard(
     val selectedProfile = headphoneProfiles.find { it.id == selectedHeadphoneProfileId }
     val isProfileActive = selectedProfile != null && selectedProfile.id != "none"
 
-    val normalizedQuery = remember(searchQuery) {
-        searchQuery.lowercase().replace(Regex("[^a-z0-9]"), "")
+    val trimmedQuery = remember(searchQuery) { searchQuery.trim() }
+    val normalizedQuery = remember(trimmedQuery) {
+        trimmedQuery.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
     }
-    val matchingEntries = remember(autoEqIndex, normalizedQuery) {
+    val matchingEntries = remember(autoEqIndex, trimmedQuery, normalizedQuery) {
         if (normalizedQuery.isEmpty()) {
-            val preferredNames = listOf(
-                "Sennheiser HD 650",
-                "Sony WH-1000XM5",
-                "Apple AirPods Pro 2",
-                "Moondrop Blessing 3",
-                "Samsung Galaxy Buds2 Pro",
-                "Beyerdynamic DT 990 Pro"
-            )
-            val top = preferredNames.mapNotNull { target ->
-                autoEqIndex.firstOrNull { it.name.equals(target, ignoreCase = true) }
-            }
-            if (top.isNotEmpty()) top else autoEqIndex.take(6)
+            emptyList()
         } else {
-            autoEqIndex
-                .filter {
-                    val n = it.name.lowercase().replace(Regex("[^a-z0-9]"), "")
-                    val f = it.form.lowercase().replace(Regex("[^a-z0-9]"), "")
-                    n.contains(normalizedQuery) || f.contains(normalizedQuery)
+            val tokens = trimmedQuery.lowercase(Locale.US)
+                .split(Regex("[^a-z0-9]+"))
+                .filter { it.isNotEmpty() }
+            val rawLower = trimmedQuery.lowercase(Locale.US)
+
+            autoEqIndex.asSequence()
+                .filter { entry ->
+                    val nameNorm = entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+                    if (nameNorm.contains(normalizedQuery)) {
+                        true
+                    } else {
+                        val fLower = entry.form.lowercase(Locale.US)
+                        val catKeywords = when {
+                            fLower.contains("in-ear") || fLower.contains("711") || fLower.contains("5128") ->
+                                "in-ear inear iem earphone earphones earbud earbuds buds"
+                            fLower.contains("earbud") ->
+                                "earbud earbuds tws earphone earphones buds"
+                            else ->
+                                "over-ear overear headphone headphones on-ear"
+                        }
+                        val searchable = "${entry.name.lowercase(Locale.US)} ${entry.source.lowercase(Locale.US)} $fLower $catKeywords"
+                        tokens.all { token -> searchable.contains(token) }
+                    }
                 }
                 .sortedWith(
                     compareBy(
                         {
-                            when (it.source.lowercase()) {
+                            val nameNorm = it.nameNorm()
+                            val nameLower = it.name.lowercase(Locale.US)
+                            when {
+                                nameNorm == normalizedQuery -> 0
+                                nameNorm.startsWith(normalizedQuery) -> 1
+                                nameLower.contains(rawLower) -> 2
+                                nameNorm.contains(normalizedQuery) -> 3
+                                else -> 4
+                            }
+                        },
+                        {
+                            when (it.source.lowercase(Locale.US)) {
                                 "oratory1990" -> 0
                                 "crinacle" -> 1
                                 "rtings" -> 2
@@ -509,13 +559,14 @@ fun AutoEqCard(
                         { it.name.length }
                     )
                 )
-                .take(12)
+                .take(20)
+                .toList()
         }
     }
 
     val modeFileDescription = when {
         autoEqUseTenBandSliders -> "10-Band Sliders · FixedBandEQ.txt"
-        engineMode == EngineMode.ROOT -> "Root Mode · ParametricEQ.txt (48 kHz Biquads)"
+        engineMode == EngineMode.ROOT -> "Root Mode · ParametricEQ.txt (Exact Biquads)"
         operatingMode == OperatingMode.LEGACY_TIER1_EQ -> "Legacy 5-Band EQ · ParametricEQ.txt (Low accuracy)"
         else -> "${engineMode.shortTitle} · ParametricEQ.txt (31-Band DP)"
     }
@@ -568,7 +619,7 @@ fun AutoEqCard(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "AUTOEQ · ${connectedProductName ?: activeRoute.label}".uppercase(),
+                            text = "AUTOEQ · ${activeRoute.label}".uppercase(Locale.US),
                             fontFamily = SpaceGroteskFontFamily,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 11.sp,
@@ -579,7 +630,7 @@ fun AutoEqCard(
                         )
                         Text(
                             text = if (isProfileActive && selectedProfile != null) {
-                                "${selectedProfile.name} (${selectedProfile.source}) · Preamp ${String.format("%.1f", preampDb)} dB"
+                                "${selectedProfile.name} (${selectedProfile.source}) · Preamp ${String.format(Locale.US, "%.1f", preampDb)} dB"
                             } else {
                                 modeFileDescription
                             },
@@ -658,72 +709,6 @@ fun AutoEqCard(
                 }
             }
 
-            if (suggestedAutoEqEntry != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(palette.secondaryC.copy(alpha = 0.65f))
-                        .border(1.dp, palette.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .testTag("autoeq_suggestion_banner"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Connected device match found",
-                            fontFamily = SpaceGroteskFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 11.sp,
-                            color = palette.onSecondaryC.copy(alpha = 0.8f)
-                        )
-                        Text(
-                            text = "${suggestedAutoEqEntry.name} (${suggestedAutoEqEntry.source})",
-                            fontFamily = SpaceGroteskFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.5.sp,
-                            color = palette.onSecondaryC,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(palette.primary)
-                                .clickable(enabled = masterEnabled) { onApplyAutoEqEntry(suggestedAutoEqEntry) }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .testTag("autoeq_confirm_suggestion")
-                        ) {
-                            Text(
-                                text = "Use this",
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 11.sp,
-                                color = palette.onPrimary
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(palette.sHigh)
-                                .clickable { onDismissSuggestion() }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                .testTag("autoeq_dismiss_suggestion")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Dismiss suggestion",
-                                tint = palette.onVar,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
             if (operatingMode == OperatingMode.LEGACY_TIER1_EQ) {
                 Text(
                     text = "Native 5-band Equalizer active: AutoEq accuracy is low.",
@@ -751,7 +736,7 @@ fun AutoEqCard(
                 singleLine = true,
                 placeholder = {
                     Text(
-                        text = "Search headphone / earphone (e.g. Sennheiser HD 650)",
+                        text = "Search earphones, earbuds, or headphones",
                         fontSize = 12.sp,
                         color = palette.onVar.copy(alpha = 0.7f)
                     )
@@ -788,69 +773,85 @@ fun AutoEqCard(
                     .testTag("autoeq_search_box")
             )
 
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                matchingEntries.forEach { entry ->
-                    val isCurrent = selectedProfile?.name.equals(entry.name, ignoreCase = true)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isCurrent) palette.secondaryC.copy(alpha = 0.55f) else palette.sHigh)
-                            .border(
-                                width = 1.dp,
-                                color = if (isCurrent) palette.primary else palette.outlineV.copy(alpha = 0.45f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .testTag("autoeq_row_${entry.name.lowercase().replace(Regex("[^a-z0-9]"), "_")}"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+            if (normalizedQuery.isNotEmpty()) {
+                if (matchingEntries.isEmpty()) {
+                    Text(
+                        text = "No matching earphones or headphones found for \"$trimmedQuery\"",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontSize = 11.5.sp,
+                        color = palette.onVar,
+                        modifier = Modifier.testTag("autoeq_empty_results")
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.name,
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 12.5.sp,
-                                color = palette.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${entry.source} · ${entry.form}",
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontSize = 10.5.sp,
-                                color = palette.onVar,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isCurrent) palette.primary else palette.primaryC)
-                                .clickable(enabled = masterEnabled) { onApplyAutoEqEntry(entry) }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                                .testTag("autoeq_use_${entry.name.lowercase().replace(Regex("[^a-z0-9]"), "_")}")
-                        ) {
-                            Text(
-                                text = if (isCurrent) "Active" else "Use this",
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 11.5.sp,
-                                color = if (isCurrent) palette.onPrimary else palette.onPrimaryC
-                            )
+                        matchingEntries.forEach { entry ->
+                            val isCurrent = selectedProfile?.name.equals(entry.name, ignoreCase = true)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isCurrent) palette.secondaryC.copy(alpha = 0.55f) else palette.sHigh)
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isCurrent) palette.primary else palette.outlineV.copy(alpha = 0.45f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .testTag("autoeq_row_${entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "_")}"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = entry.name,
+                                        fontFamily = SpaceGroteskFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.5.sp,
+                                        color = palette.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${entry.source} · ${entry.form}",
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 10.5.sp,
+                                        color = palette.onVar,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (isCurrent) palette.primary else palette.primaryC)
+                                        .clickable(enabled = masterEnabled) { onApplyAutoEqEntry(entry) }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                        .testTag("autoeq_use_${entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "_")}")
+                                ) {
+                                    Text(
+                                        text = if (isCurrent) "Active" else "Use this",
+                                        fontFamily = SpaceGroteskFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.5.sp,
+                                        color = if (isCurrent) palette.onPrimary else palette.onPrimaryC
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
             Text(
-                text = "AutoEq (MIT) · Measurements: oratory1990, Crinacle, RTINGS (CC BY-NC-SA 4.0)",
+                text = if (autoEqIndex.isNotEmpty()) {
+                    "AutoEq Repository (${autoEqIndex.size} models) · Type in search above to select your device"
+                } else {
+                    "AutoEq Repository · Type in search above to select your device"
+                },
                 fontSize = 10.sp,
                 color = palette.onVar.copy(alpha = 0.72f),
                 maxLines = 1,
@@ -859,4 +860,8 @@ fun AutoEqCard(
         }
     }
 }
+
+private fun AutoEqEntry.nameNorm(): String =
+    name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+
 

@@ -118,6 +118,9 @@ fun AudioEqScreen(
                         masterEnabled = uiState.masterEnabled,
                         activePresetName = uiState.activePresetName,
                         selectedMode = uiState.engineMode,
+                        shizukuState = uiState.shizukuState,
+                        shizukuPrivilege = uiState.shizukuPrivilege,
+                        rootAvailable = uiState.diagnostics.rootAvailable,
                         onToggleMaster = viewModel::setMasterEnabled,
                         onOpenSettings = { viewModel.setShowSettingsSheet(true) }
                     )
@@ -141,29 +144,6 @@ fun AudioEqScreen(
                         onSelectPreset = { preset -> viewModel.selectPreset(preset) },
                         onDeleteCustomPreset = { presetId -> viewModel.deleteCustomPreset(presetId) }
                     )
-                }
-
-                if (uiState.activeRoute != OutputRoute.SPEAKER) {
-                    item {
-                        AutoEqCard(
-                            masterEnabled = uiState.masterEnabled,
-                            activeRoute = uiState.activeRoute,
-                            connectedProductName = uiState.connectedProductName,
-                            engineMode = uiState.engineMode,
-                            operatingMode = uiState.operatingMode,
-                            headphoneProfiles = uiState.headphoneProfiles,
-                            selectedHeadphoneProfileId = uiState.headphoneProfileId,
-                            preampDb = uiState.preampDb,
-                            autoEqIndex = uiState.autoEqIndex,
-                            suggestedAutoEqEntry = uiState.suggestedAutoEqEntry,
-                            autoEqClipped = uiState.autoEqClipped,
-                            autoEqUseTenBandSliders = uiState.autoEqUseTenBandSliders,
-                            onApplyAutoEqEntry = { entry -> viewModel.applyAutoEqEntry(entry) },
-                            onToggleUseTenBandSliders = viewModel::setAutoEqUseTenBandSliders,
-                            onClearAutoEq = viewModel::clearAutoEqProfile,
-                            onDismissSuggestion = viewModel::dismissSuggestedAutoEq
-                        )
-                    }
                 }
 
                 item {
@@ -227,6 +207,29 @@ fun AudioEqScreen(
                         onSurroundWidthChange = viewModel::setSurroundWidth,
                         onResetAll = viewModel::resetEnhancers
                     )
+                }
+
+                if (uiState.activeRoute != OutputRoute.SPEAKER) {
+                    item {
+                        AutoEqCard(
+                            masterEnabled = uiState.masterEnabled,
+                            activeRoute = uiState.activeRoute,
+                            connectedProductName = uiState.connectedProductName,
+                            engineMode = uiState.engineMode,
+                            operatingMode = uiState.operatingMode,
+                            headphoneProfiles = uiState.headphoneProfiles,
+                            selectedHeadphoneProfileId = uiState.headphoneProfileId,
+                            preampDb = uiState.preampDb,
+                            autoEqIndex = uiState.autoEqIndex,
+                            suggestedAutoEqEntry = uiState.suggestedAutoEqEntry,
+                            autoEqClipped = uiState.autoEqClipped,
+                            autoEqUseTenBandSliders = uiState.autoEqUseTenBandSliders,
+                            onApplyAutoEqEntry = { entry -> viewModel.applyAutoEqEntry(entry) },
+                            onToggleUseTenBandSliders = viewModel::setAutoEqUseTenBandSliders,
+                            onClearAutoEq = viewModel::clearAutoEqProfile,
+                            onDismissSuggestion = viewModel::dismissSuggestedAutoEq
+                        )
+                    }
                 }
 
                 item {

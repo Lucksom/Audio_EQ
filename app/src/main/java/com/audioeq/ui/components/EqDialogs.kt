@@ -638,7 +638,7 @@ fun SoundCalibrationSheet(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                        placeholder = { Text("Search AutoEq headphones (e.g., HD 650, XM5, Sundara)") },
+                        placeholder = { Text("Search earphones, earbuds, or headphones") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -650,9 +650,12 @@ fun SoundCalibrationSheet(
                     }
 
                     val filteredBuiltIn = headphoneProfiles.filter {
-                        searchQuery.isBlank() ||
+                        if (searchQuery.isBlank()) {
+                            it.id == "none" || it.id == selectedHeadphoneProfileId
+                        } else {
                             it.name.contains(searchQuery, ignoreCase = true) ||
-                            it.source.contains(searchQuery, ignoreCase = true)
+                                it.source.contains(searchQuery, ignoreCase = true)
+                        }
                     }
 
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -702,12 +705,12 @@ fun SoundCalibrationSheet(
 
                     val matchingCatalog = remember(searchQuery, autoEqCatalog) {
                         if (searchQuery.isBlank()) {
-                            autoEqCatalog.take(6)
+                            emptyList()
                         } else {
                             autoEqCatalog.filter {
                                 it.name.contains(searchQuery, ignoreCase = true) ||
                                     (it.source?.contains(searchQuery, ignoreCase = true) == true)
-                            }.take(15)
+                            }.take(20)
                         }
                     }
 
@@ -1348,19 +1351,32 @@ fun SettingsAndDiagnosticsSheet(
                     }
                 }
 
-                if (selectedMode == EngineMode.ADB_SHIZUKU || shizukuState == ShizukuState.READY) {
-                    val actionLabel = when (shizukuState) {
-                        ShizukuState.READY -> if (selectedMode == EngineMode.ADB_SHIZUKU) "Active · Re-sync" else "Use Shizuku"
-                        ShizukuState.NEEDS_PERMISSION,
-                        ShizukuState.DENIED_PERMANENTLY -> "Grant Shizuku Permission"
-                        ShizukuState.NOT_RUNNING -> "Open Shizuku App"
-                        ShizukuState.NOT_INSTALLED -> "Install Shizuku"
+                if (selectedMode != EngineMode.LEGACY ||
+                    shizukuState == ShizukuState.READY ||
+                    shizukuState == ShizukuState.NEEDS_PERMISSION
+                ) {
+                    val isRootMode = selectedMode == EngineMode.ROOT
+                    val actionLabel = when {
+                        isRootMode && diagnostics.rootAvailable -> "Root Applied · Re-sync"
+                        isRootMode && shizukuState == ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Root"
+                        isRootMode -> "Verify & Apply Root (su)"
+                        shizukuState == ShizukuState.READY ->
+                            if (selectedMode == EngineMode.ADB_SHIZUKU) "Applied · Re-sync" else "Apply Shizuku"
+                        shizukuState == ShizukuState.NEEDS_PERMISSION ||
+                            shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Grant Shizuku Permission"
+                        shizukuState == ShizukuState.NOT_RUNNING -> "Open Shizuku App"
+                        shizukuState == ShizukuState.NOT_INSTALLED -> "Install Shizuku"
                         else -> "Connect Shizuku"
                     }
-                    val statusLabel = if (shizukuState == ShizukuState.READY) {
-                        "Shizuku: READY (${shizukuPrivilege.ifBlank { "adb" }})"
-                    } else {
-                        "Shizuku: ${shizukuState.name}"
+                    val statusLabel = when {
+                        isRootMode && diagnostics.rootAvailable ->
+                            "Privilege: ${shizukuPrivilege.ifBlank { "Root (su uid=0)" }} [APPLIED]"
+                        isRootMode ->
+                            "Privilege: Root (su) not yet granted (${shizukuState.name})"
+                        shizukuState == ShizukuState.READY ->
+                            "Privilege: ${shizukuPrivilege.ifBlank { "Shizuku Shell (adb uid=2000)" }} [APPLIED]"
+                        else ->
+                            "Shizuku: ${shizukuState.name} (${shizukuPrivilege.ifBlank { "none" }})"
                     }
                     Row(
                         modifier = Modifier
@@ -1377,7 +1393,10 @@ fun SettingsAndDiagnosticsSheet(
                         Text(
                             text = statusLabel,
                             fontSize = 12.sp,
-                            color = palette.onVar
+                            color = palette.onVar,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = actionLabel,

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import rikka.shizuku.Shizuku
+import java.util.concurrent.TimeUnit
 
 enum class ShizukuState {
     NOT_INSTALLED,
@@ -59,44 +60,100 @@ object ShizukuManager {
 
     fun refreshStatus() = refresh()
 
-    fun isRootAvailable(): Boolean = rootAccessVerified
+    fun isRootAvailable(): Boolean = rootAccessVerified || isShizukuRunningAsRoot()
+
+    fun isShizukuRunningAsRoot(): Boolean = try {
+        Shizuku.pingBinder() &&
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED &&
+            Shizuku.getUid() == 0
+    } catch (_: Throwable) {
+        false
+    }
 
     fun verifyRootAccess(): Boolean {
-        return try {
+        refresh()
+        if (isShizukuRunningAsRoot()) {
+            rootAccessVerified = true
+            _privilegeSummary.value = privilege()
+            onStateChangedListener?.invoke(_state.value)
+            return true
+        }
+
+        val suDirect = try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-            val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            val finished = process.waitFor(2000, TimeUnit.MILLISECONDS)
             if (!finished) {
                 process.destroyForcibly()
-                rootAccessVerified = false
-                return false
+                false
+            } else {
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                process.exitValue() == 0 && output.contains("uid=0")
             }
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val verified = process.exitValue() == 0 && output.contains("uid=0")
-            rootAccessVerified = verified
-            verified
         } catch (_: Throwable) {
-            rootAccessVerified = false
             false
         }
+
+        if (suDirect) {
+            rootAccessVerified = true
+            _privilegeSummary.value = privilege()
+            onStateChangedListener?.invoke(_state.value)
+            return true
+        }
+
+        val shizukuSu = try {
+            if (_state.value == ShizukuState.READY) {
+                val idOut = execIfBound("id").orEmpty()
+                if (idOut.contains("uid=0")) {
+                    true
+                } else {
+                    val suOut = execIfBound("su -c id").orEmpty()
+                    suOut.contains("uid=0")
+                }
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
+        }
+
+        rootAccessVerified = shizukuSu
+        _privilegeSummary.value = privilege()
+        onStateChangedListener?.invoke(_state.value)
+        return shizukuSu
     }
 
     fun clearRootVerification() {
         rootAccessVerified = false
+        _privilegeSummary.value = privilege()
+    }
+
+    private fun execSuCommand(command: String): String? {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+            val finished = process.waitFor(2000, TimeUnit.MILLISECONDS)
+            if (finished && process.exitValue() == 0) {
+                process.inputStream.bufferedReader().use { it.readText() }.takeIf { it.isNotBlank() }
+            } else {
+                process.destroyForcibly()
+                null
+            }
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun execPrivilegedCommand(command: String): String? {
-        return execIfBound(command) ?: runCatching {
-            if (rootAccessVerified) {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-                val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
-                if (finished && process.exitValue() == 0) {
-                    process.inputStream.bufferedReader().use { it.readText() }
-                } else {
-                    process.destroyForcibly()
-                    null
-                }
-            } else null
-        }.getOrNull()
+        if (rootAccessVerified) {
+            if (isShizukuRunningAsRoot()) {
+                val out = execIfBound(command)
+                if (!out.isNullOrBlank()) return out
+            }
+            val suOut = execSuCommand(command)
+            if (!suOut.isNullOrBlank()) return suOut
+            val shizukuSuOut = execIfBound("su -c $command")
+            if (!shizukuSuOut.isNullOrBlank()) return shizukuSuOut
+        }
+        return execIfBound(command) ?: if (rootAccessVerified) execSuCommand(command) else null
     }
 
     fun discoverAudioFlingerSessions(musicOnly: Boolean = true): List<Int> {
@@ -125,19 +182,7 @@ object ShizukuManager {
     }
 
     fun readBluetoothCodecSummary(): String? {
-        val output = execIfBound("dumpsys bluetooth_manager") ?: runCatching {
-            if (rootAccessVerified) {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys bluetooth_manager"))
-                val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
-                if (finished && process.exitValue() == 0) {
-                    process.inputStream.bufferedReader().use { it.readText() }
-                } else {
-                    process.destroyForcibly()
-                    null
-                }
-            } else null
-        }.getOrNull() ?: return null
-
+        val output = execPrivilegedCommand("dumpsys bluetooth_manager") ?: return null
         val codecRegex = Regex("""(?:codecConfig|mCodecConfig|mCodecType|Selected codec)\s*[:=]?\s*([^\n,]+)""", RegexOption.IGNORE_CASE)
         val match = codecRegex.find(output)
         return match?.groupValues?.get(1)?.trim() ?: "Bluetooth (A2DP)"
@@ -154,21 +199,13 @@ object ShizukuManager {
     }
 
     fun resolveSystemEqConflictIfRoot(): Boolean {
-        if (!rootAccessVerified) return false
-        return try {
-            val process = Runtime.getRuntime().exec(
-                arrayOf("su", "-c", "setprop persist.audio.system_eq.enable false")
-            )
-            val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                false
-            } else {
-                process.exitValue() == 0
-            }
-        } catch (_: Throwable) {
-            false
+        if (!isRootAvailable()) return false
+        val cmd = "setprop persist.audio.system_eq.enable false"
+        if (isShizukuRunningAsRoot()) {
+            execIfBound(cmd)
+            return true
         }
+        return execSuCommand("$cmd && echo ok")?.contains("ok") == true
     }
 
     @Volatile private var service: IUserService? = null
@@ -189,8 +226,12 @@ object ShizukuManager {
             if (requestCode == REQUEST_CODE) {
                 if (grantResult == PackageManager.PERMISSION_GRANTED) {
                     dumpGrantAttempted = false
+                    if (isShizukuRunningAsRoot()) {
+                        rootAccessVerified = true
+                    }
                     refresh()
                     tryGrantDumpPermissionAsync()
+                    onStateChangedListener?.invoke(ShizukuState.READY)
                 } else {
                     val deniedPerm = runCatching {
                         Shizuku.shouldShowRequestPermissionRationale()
@@ -245,6 +286,9 @@ object ShizukuManager {
         } catch (_: Throwable) {
             if (isShizukuAppInstalled()) ShizukuState.NOT_RUNNING else ShizukuState.NOT_INSTALLED
         }
+        if (newState == ShizukuState.READY && isShizukuRunningAsRoot()) {
+            rootAccessVerified = true
+        }
         _state.value = newState
         _privilegeSummary.value = privilege()
         if (newState == ShizukuState.READY) {
@@ -259,14 +303,18 @@ object ShizukuManager {
     }
 
     fun privilege(): String = try {
+        val shizukuReady = Shizuku.pingBinder() &&
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         when {
-            !Shizuku.pingBinder() -> "none"
-            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED -> "ungranted"
-            Shizuku.getUid() == 0 -> "adb (su)"
-            else -> "adb"
+            shizukuReady && Shizuku.getUid() == 0 -> "Shizuku Root (su uid=0)"
+            rootAccessVerified -> "Root (su uid=0)"
+            shizukuReady -> "Shizuku Shell (adb uid=2000)"
+            Shizuku.pingBinder() -> "Permission needed"
+            isShizukuAppInstalled() -> "Shizuku stopped"
+            else -> "none"
         }
     } catch (_: Throwable) {
-        "none"
+        if (rootAccessVerified) "Root (su uid=0)" else "none"
     }
 
     fun requestPermission() {
@@ -286,10 +334,21 @@ object ShizukuManager {
                 ShizukuState.READY -> {
                     if (service == null) bind()
                     tryGrantDumpPermissionAsync()
+                    _privilegeSummary.value = privilege()
                     onStateChangedListener?.invoke(ShizukuState.READY)
                 }
                 else -> Unit
             }
+        }
+    }
+
+    fun ensureBoundAndGrantPermissions() {
+        refresh()
+        if (_state.value == ShizukuState.READY) {
+            if (service == null) bind()
+            tryGrantDumpPermissionAsync()
+            _privilegeSummary.value = privilege()
+            onStateChangedListener?.invoke(ShizukuState.READY)
         }
     }
 
@@ -302,6 +361,7 @@ object ShizukuManager {
                 val pkg = ctx.packageName
                 execIfBound("pm grant $pkg android.permission.DUMP")
                 execIfBound("pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
+                _privilegeSummary.value = privilege()
                 onStateChangedListener?.invoke(_state.value)
             }
         }.start()
@@ -330,11 +390,13 @@ object ShizukuManager {
             val s = IUserService.Stub.asInterface(binder)
             service = s
             pending?.complete(s)
+            _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(_state.value)
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
             service = null
+            _privilegeSummary.value = privilege()
         }
     }
 
@@ -375,7 +437,7 @@ object ShizukuManager {
             val proc = method.invoke(null, arrayOf("sh", "-c", command), null, null) as? Process
                 ?: return null
             val out = proc.inputStream.bufferedReader().use { it.readText() }
-            proc.waitFor(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            proc.waitFor(2000, TimeUnit.MILLISECONDS)
             out.takeIf { it.isNotBlank() }
         } catch (_: Throwable) {
             null
@@ -400,7 +462,20 @@ object ShizukuManager {
 
     fun execIfBound(command: String): String? {
         if (_state.value != ShizukuState.READY) return null
-        val s = service
+        var s = service
+        if (s == null) {
+            bind()
+            var waited = 0
+            while (service == null && waited < 500) {
+                try {
+                    Thread.sleep(50)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                waited += 50
+            }
+            s = service
+        }
         if (s != null) {
             try {
                 val out = s.exec(command)
@@ -409,8 +484,6 @@ object ShizukuManager {
                 }
             } catch (_: Throwable) {
             }
-        } else {
-            bind()
         }
         return execViaShizukuNewProcess(command)
     }

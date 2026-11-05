@@ -286,8 +286,8 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.GraphicEq,
                 title = "Deep Bass",
-                subtitle = "0 Hz low-shelf filter (35 Hz cutoff) & 10-band downward bass shift",
-                badgeText = if (deepBassActive) "0 Hz SHELF" else "47 Hz PEAK",
+                subtitle = "DC low-shelf sub-bass filter & 10-band downward bass shift",
+                badgeText = if (deepBassActive) "DC SHELF" else "STD PEAK",
                 checked = deepBassActive,
                 enabled = enabled,
                 onCheckedChange = onToggleDeepBass,
@@ -300,7 +300,7 @@ fun EnhancerCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Shifts Bands 0–9 down (47→0 Hz, 141→47 Hz … 1688→1313 Hz)",
+                            text = "Shifts Bands 0–9 downward by one step for extended sub-bass",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = palette.textSecondary,
                                 fontSize = 11.sp
@@ -347,14 +347,14 @@ fun EnhancerCard(
                                     )
                                 )
                                 Text(
-                                    text = "• Normal Default Bass: Band 0 is a 47 Hz peaking filter whose boost rolls off below 35 Hz toward 0 dB.",
+                                    text = "• Normal Default Bass: Band 0 uses a standard peaking filter whose boost rolls off in the lowest sub-bass range toward 0 dB.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp
                                     )
                                 )
                                 Text(
-                                    text = "• Deep Bass: Shifts the first 10 bands down by one step so Band 0 sits at 0 Hz (DC Low-Shelf, fc=35 Hz, Q=0.7071), keeping full sub-bass boost down to 20 Hz without roll-off.",
+                                    text = "• Deep Bass: Shifts the first 10 bands down by one step so Band 0 becomes a DC Low-Shelf filter (Q=0.7071), keeping full sub-bass boost across the lowest octaves without roll-off.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp
@@ -369,7 +369,7 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.Speaker,
                 title = "Bass Enhancer",
-                subtitle = "95 Hz Butterworth low-shelf + 62 Hz punch bell (zero mid/treble volume suppression)",
+                subtitle = "Butterworth low-shelf + sub-bass punch bell (zero mid/treble volume suppression)",
                 badgeText = if (config.bassEnabled) {
                     String.format(Locale.US, "+%.1f dB", config.bassBoostDb)
                 } else "OFF",
@@ -385,7 +385,7 @@ fun EnhancerCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Low-Shelf & Punch Gain (20–140 Hz)",
+                            text = "Low-Shelf & Punch Gain",
                             style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
                         )
                         Text(
@@ -440,7 +440,7 @@ fun EnhancerCard(
                                 .testTag("virtual_bass_info_toggle")
                         ) {
                             Text(
-                                text = "Harmonic Overtones (110 / 165 / 220 Hz)",
+                                text = "Harmonic Overtones (2× / 3× / 4×)",
                                 style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
                             )
                             Icon(
@@ -496,14 +496,14 @@ fun EnhancerCard(
                                     )
                                 )
                                 Text(
-                                    text = "• Fundamental (55 Hz): Deep sub-bass that small phone speakers physically cannot reproduce without clipping.",
+                                    text = "• Missing Fundamental: Deep sub-bass that small phone speakers physically cannot reproduce without clipping.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp
                                     )
                                 )
                                 Text(
-                                    text = "• Harmonics (110, 165, 220 Hz): 2×, 3×, and 4× overtones that let your ear perceive the 55 Hz bass pitch on small speakers.",
+                                    text = "• Harmonic Series (H2, H3, H4): 2×, 3×, and 4× overtones that let your ear perceive the deep sub-bass pitch on small speakers.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp
@@ -669,7 +669,7 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.RecordVoiceOver,
                 title = "Dialogue Enhancer",
-                subtitle = "1.0–4.0 kHz vocal formant boost + 220 Hz mud unmasking",
+                subtitle = "Vocal formant clarity boost + low-mid mud unmasking",
                 badgeText = if (config.dialogueEnhancerEnabled) {
                     String.format(Locale.US, "+%.1f dB", (config.dialogueAmount / 16f) * 10f)
                 } else "OFF",
@@ -720,7 +720,7 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = if (config.surroundEnabled) Icons.Default.SurroundSound else Icons.Default.SpatialAudioOff,
                 title = "3D Surround Virtualizer",
-                subtitle = "Binaural HRTF pinna contour & M/S crossfeed (sub-bass phase locked ≤ 234 Hz)",
+                subtitle = "Binaural HRTF pinna contour & M/S crossfeed (sub-bass phase locked)",
                 badgeText = if (config.surroundEnabled) {
                     "${(config.surroundWidth * 100).roundToInt()}%"
                 } else "OFF",
@@ -735,7 +735,7 @@ fun EnhancerCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Soundstage Width (> 234 Hz)",
+                            text = "Soundstage Width",
                             style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
                         )
                         Text(

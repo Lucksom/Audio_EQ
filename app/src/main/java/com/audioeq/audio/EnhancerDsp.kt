@@ -29,7 +29,7 @@ enum class IeqPreset(
     DETAILED(
         id = "ieq_detailed",
         label = "Detailed",
-        subtitle = "Treble clarity & vocal presence (+4.88 dB @ 4.7 kHz)",
+        subtitle = "Treble clarity & vocal presence (+4.88 dB peak)",
         targetsQ4 = intArrayOf(
             -50, 5, 19, 25, 29, 44, 52, 57, 56, 56,
             61, 69, 77, 78, 72, 74, 48, 22, -2, -59
@@ -92,8 +92,8 @@ enum class AudioProfile(
     DEEP_BASS(
         id = "profile_deep_bass",
         label = "Deep Bass",
-        subtitle = "0 Hz low-shelf filter (35 Hz cutoff) + 10-band downward shift (47→0 Hz)",
-        badge = "0Hz Shelf"
+        subtitle = "DC low-shelf sub-bass filter + 10-band downward shift",
+        badge = "Sub Shelf"
     ),
     VOICE(
         id = "profile_voice",
@@ -175,16 +175,16 @@ object EnhancerDsp {
     )
 
     val DEEP_BASS_SHIFT_BANDS: List<DeepBassShiftBand> = listOf(
-        DeepBassShiftBand(0, 47, 0, "0 Hz low-shelf filter (35 Hz cutoff) with zero sub-bass roll-off"),
-        DeepBassShiftBand(1, 141, 47, "Reclaims 47 Hz deep sub-bass punch"),
-        DeepBassShiftBand(2, 234, 141, "Shifts upper-bass warmth into 141 Hz"),
-        DeepBassShiftBand(3, 328, 234, "Concentrates low-mid body into 234 Hz"),
-        DeepBassShiftBand(4, 469, 328, "Tightens 328 Hz lower-harmonic fundamental"),
-        DeepBassShiftBand(5, 656, 469, "Increases sub-500 Hz filter density"),
+        DeepBassShiftBand(0, 47, 0, "DC low-shelf filter with zero sub-bass roll-off"),
+        DeepBassShiftBand(1, 141, 47, "Reclaims deep sub-bass punch"),
+        DeepBassShiftBand(2, 234, 141, "Shifts upper-bass warmth downward"),
+        DeepBassShiftBand(3, 328, 234, "Concentrates low-mid body"),
+        DeepBassShiftBand(4, 469, 328, "Tightens lower-harmonic fundamental"),
+        DeepBassShiftBand(5, 656, 469, "Increases lower-band filter density"),
         DeepBassShiftBand(6, 844, 656, "Smooths transition between bass and vocal fundamentals"),
         DeepBassShiftBand(7, 1031, 844, "Refines lower midrange articulation"),
-        DeepBassShiftBand(8, 1313, 1031, "Anchors 1 kHz reference pivot"),
-        DeepBassShiftBand(9, 1688, 1313, "Bridges lower-mids to fixed 2250 Hz upper-mid band")
+        DeepBassShiftBand(8, 1313, 1031, "Anchors reference midrange pivot"),
+        DeepBassShiftBand(9, 1688, 1313, "Bridges lower-mids to fixed upper-mid band")
     )
 
     fun resolveEndpointSpec(
@@ -220,7 +220,7 @@ object EnhancerDsp {
                         volmaxQ4 = 17,
                         volmaxMakeupDb = 0.0f,
                         virtualizerEnabled = true,
-                        virtualizerModeLabel = "Adaptive Speaker Stage (>234 Hz)",
+                        virtualizerModeLabel = "Adaptive Speaker Stage",
                         virtualizerWidth = 0.40f,
                         deepBassActive = deepBassActive
                     )
@@ -282,7 +282,7 @@ object EnhancerDsp {
                         volmaxQ4 = 32,
                         volmaxMakeupDb = 0.5f,
                         virtualizerEnabled = true,
-                        virtualizerModeLabel = "Cinema Wide Crosstalk Canceller (>234 Hz)",
+                        virtualizerModeLabel = "Cinema Wide Crosstalk Canceller",
                         virtualizerWidth = 0.65f,
                         deepBassActive = deepBassActive
                     )
@@ -376,12 +376,12 @@ object EnhancerDsp {
                         ieqAmount = 0,
                         deEnabled = false,
                         deAmount = 0,
+                        virtualizerEnabled = false,
                         virtualBassAuto = false,
                         peakQ8 = 256,
                         peakCeilingDb = 0.0f,
                         volmaxQ4 = 32,
                         volmaxMakeupDb = 0.0f,
-                        virtualizerEnabled = false,
                         virtualizerModeLabel = "Direct GEQ Acoustic Path",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
@@ -406,7 +406,7 @@ object EnhancerDsp {
                         volmaxQ4 = 24,
                         volmaxMakeupDb = 0.0f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Sub-Bass Phase Locked (<234 Hz Mono Anchored)",
+                        virtualizerModeLabel = "Sub-Bass Phase Locked (Mono Anchored)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = true
                     )
@@ -425,7 +425,7 @@ object EnhancerDsp {
                         volmaxQ4 = 32,
                         volmaxMakeupDb = 0.5f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "0 Hz Low-Shelf (fc=35 Hz, Q=0.7071)",
+                        virtualizerModeLabel = "DC Low-Shelf (Q=0.7071)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = true
                     )
@@ -444,7 +444,7 @@ object EnhancerDsp {
                         volmaxQ4 = 36,
                         volmaxMakeupDb = 0.75f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "0 Hz Low-Shelf (fc=35 Hz, Q=0.7071)",
+                        virtualizerModeLabel = "DC Low-Shelf (Q=0.7071)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = true
                     )
