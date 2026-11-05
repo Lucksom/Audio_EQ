@@ -89,12 +89,6 @@ enum class AudioProfile(
         subtitle = "Direct acoustic fidelity on Speaker/Headphones; Balanced IEQ on Bluetooth",
         badge = "Hi-Fi"
     ),
-    DEEP_BASS(
-        id = "profile_deep_bass",
-        label = "Deep Bass",
-        subtitle = "DC low-shelf sub-bass filter + 10-band downward shift",
-        badge = "Sub Shelf"
-    ),
     VOICE(
         id = "profile_voice",
         label = "Voice",
@@ -200,7 +194,7 @@ object EnhancerDsp {
             OutputRoute.USB_DAC -> "USB Hi-Res DAC / Line-Out"
             OutputRoute.BLUETOOTH -> "Bluetooth Audio (A2DP)"
         }
-        val deepBassActive = deepBassOverride || profile == AudioProfile.DEEP_BASS
+        val deepBassActive = deepBassOverride
 
         return when (profile) {
             AudioProfile.DYNAMIC -> {
@@ -389,68 +383,6 @@ object EnhancerDsp {
                 }
             }
 
-            AudioProfile.DEEP_BASS -> {
-                when {
-                    isSpeaker -> EndpointProfileSpec(
-                        profile = profile,
-                        route = route,
-                        endpointName = endpointName,
-                        ieqEnabled = true,
-                        ieqPreset = IeqPreset.WARM,
-                        ieqAmount = 8,
-                        deEnabled = false,
-                        deAmount = 0,
-                        virtualBassAuto = true,
-                        peakQ8 = 240,
-                        peakCeilingDb = -1.0f,
-                        volmaxQ4 = 24,
-                        volmaxMakeupDb = 0.0f,
-                        virtualizerEnabled = false,
-                        virtualizerModeLabel = "Sub-Bass Phase Locked (Mono Anchored)",
-                        virtualizerWidth = 0.0f,
-                        deepBassActive = true
-                    )
-                    isBluetooth -> EndpointProfileSpec(
-                        profile = profile,
-                        route = route,
-                        endpointName = endpointName,
-                        ieqEnabled = true,
-                        ieqPreset = IeqPreset.BALANCED,
-                        ieqAmount = 8,
-                        deEnabled = false,
-                        deAmount = 0,
-                        virtualBassAuto = false,
-                        peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.5f,
-                        virtualizerEnabled = false,
-                        virtualizerModeLabel = "DC Low-Shelf (Q=0.7071)",
-                        virtualizerWidth = 0.0f,
-                        deepBassActive = true
-                    )
-                    else -> EndpointProfileSpec(
-                        profile = profile,
-                        route = route,
-                        endpointName = endpointName,
-                        ieqEnabled = true,
-                        ieqPreset = IeqPreset.WARM,
-                        ieqAmount = 7,
-                        deEnabled = false,
-                        deAmount = 0,
-                        virtualBassAuto = false,
-                        peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 36,
-                        volmaxMakeupDb = 0.75f,
-                        virtualizerEnabled = false,
-                        virtualizerModeLabel = "DC Low-Shelf (Q=0.7071)",
-                        virtualizerWidth = 0.0f,
-                        deepBassActive = true
-                    )
-                }
-            }
-
             AudioProfile.VOICE -> {
                 when {
                     isSpeaker -> EndpointProfileSpec(
@@ -546,10 +478,9 @@ object EnhancerDsp {
         val spec = resolveEndpointSpec(profile, route, current.deepBassEnabled)
         return current.copy(
             profile = profile,
-            deepBassEnabled = if (profile == AudioProfile.DEEP_BASS) true else current.deepBassEnabled,
+            deepBassEnabled = current.deepBassEnabled,
             bassEnabled = bassEnabledKeepOrDefault(current, profile),
             bassBoostDb = when {
-                profile == AudioProfile.DEEP_BASS && current.bassBoostDb < 3.5f -> 4.5f
                 profile == AudioProfile.VIDEO && current.bassBoostDb < 2.0f -> 2.5f
                 profile == AudioProfile.DYNAMIC && current.bassBoostDb < 1.5f -> 2.0f
                 else -> current.bassBoostDb
@@ -567,7 +498,7 @@ object EnhancerDsp {
 
     private fun bassEnabledKeepOrDefault(current: EnhancerConfig, profile: AudioProfile): Boolean {
         return when (profile) {
-            AudioProfile.DEEP_BASS, AudioProfile.VIDEO, AudioProfile.DYNAMIC -> true
+            AudioProfile.VIDEO, AudioProfile.DYNAMIC -> true
             AudioProfile.VOICE -> false
             else -> current.bassEnabled
         }
@@ -609,7 +540,7 @@ object EnhancerDsp {
         sampleRate: Double = 48000.0
     ): DoubleArray {
         val result = DoubleArray(31)
-        val active = config.deepBassEnabled || config.profile == AudioProfile.DEEP_BASS
+        val active = config.deepBassEnabled
         if (!active) return result
 
         val shelfGainDb = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
@@ -761,7 +692,7 @@ object EnhancerDsp {
             ((targetsQ4[b] / 16.0) - refMidDb) * mu
         }
 
-        val ieqFreqs = if (config.deepBassEnabled || config.profile == AudioProfile.DEEP_BASS) {
+        val ieqFreqs = if (config.deepBassEnabled) {
             IEQ_FREQS_20_DEEP_BASS
         } else {
             IEQ_FREQS_20

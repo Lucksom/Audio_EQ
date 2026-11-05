@@ -282,7 +282,7 @@ fun EnhancerCard(
                 }
             }
 
-            val deepBassActive = config.deepBassEnabled || config.profile == AudioProfile.DEEP_BASS
+            val deepBassActive = config.deepBassEnabled
             EnhancerModuleContainer(
                 icon = Icons.Default.GraphicEq,
                 title = "Deep Bass",
@@ -378,7 +378,10 @@ fun EnhancerCard(
                 onCheckedChange = onToggleBass,
                 testTag = "enhancer_bass_switch"
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -386,7 +389,10 @@ fun EnhancerCard(
                     ) {
                         Text(
                             text = "Low-Shelf & Punch Gain",
-                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
+                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                         Text(
                             text = String.format(Locale.US, "+%.1f / +6.0 dB", config.bassBoostDb),
@@ -394,7 +400,8 @@ fun EnhancerCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = palette.primary
-                            )
+                            ),
+                            maxLines = 1
                         )
                     }
                     Slider(
@@ -407,7 +414,10 @@ fun EnhancerCard(
                             activeTrackColor = palette.primary,
                             inactiveTrackColor = palette.surface2
                         ),
-                        modifier = Modifier.testTag("enhancer_bass_slider")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("enhancer_bass_slider")
                     )
                 }
             }
@@ -424,7 +434,10 @@ fun EnhancerCard(
                 onCheckedChange = onToggleVirtualBass,
                 testTag = "enhancer_virtual_bass_switch"
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -432,30 +445,27 @@ fun EnhancerCard(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .weight(1f, fill = false)
+                                .padding(end = 8.dp)
+                                .clip(RoundedCornerShape(6.dp))
                                 .clickable { showVirtualBassInfo = !showVirtualBassInfo }
                                 .padding(vertical = 2.dp)
                                 .testTag("virtual_bass_info_toggle")
                         ) {
                             Text(
-                                text = "Harmonic Overtones (2× / 3× / 4×)",
-                                style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
+                                text = "Harmonic Overtones (2×/3×/4×)",
+                                style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Virtual Bass info",
                                 tint = palette.primary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = if (showVirtualBassInfo) "Hide info" else "What is this?",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = palette.primary,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 10.sp
-                                )
+                                modifier = Modifier.size(13.dp)
                             )
                         }
                         Text(
@@ -469,7 +479,8 @@ fun EnhancerCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = palette.primary
-                            )
+                            ),
+                            maxLines = 1
                         )
                     }
 
@@ -523,7 +534,10 @@ fun EnhancerCard(
                             activeTrackColor = palette.primary,
                             inactiveTrackColor = palette.surface2
                         ),
-                        modifier = Modifier.testTag("enhancer_virtual_bass_slider")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("enhancer_virtual_bass_slider")
                     )
                 }
             }
@@ -630,14 +644,21 @@ fun EnhancerCard(
                         enter = expandVertically() + fadeIn(),
                         exit = shrinkVertically() + fadeOut()
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "Target Steering Strength (Amount 1–16)",
-                                    style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
+                                    style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
                                 Text(
                                     text = "${config.ieqAmount} / 16 (${(config.ieqAmount * 100) / 16}%)",
@@ -645,7 +666,8 @@ fun EnhancerCard(
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold,
                                         color = palette.primary
-                                    )
+                                    ),
+                                    maxLines = 1
                                 )
                             }
                             Slider(
@@ -659,7 +681,10 @@ fun EnhancerCard(
                                     activeTrackColor = palette.primary,
                                     inactiveTrackColor = palette.surface2
                                 ),
-                                modifier = Modifier.testTag("enhancer_ieq_amount_slider")
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
+                                    .testTag("enhancer_ieq_amount_slider")
                             )
                         }
                     }
@@ -678,14 +703,21 @@ fun EnhancerCard(
                 onCheckedChange = onToggleDialogue,
                 testTag = "enhancer_dialogue_switch"
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Speech Intelligibility Boost",
-                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
+                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                         Text(
                             text = String.format(
@@ -698,7 +730,8 @@ fun EnhancerCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = palette.primary
-                            )
+                            ),
+                            maxLines = 1
                         )
                     }
                     Slider(
@@ -712,7 +745,10 @@ fun EnhancerCard(
                             activeTrackColor = palette.primary,
                             inactiveTrackColor = palette.surface2
                         ),
-                        modifier = Modifier.testTag("enhancer_dialogue_slider")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("enhancer_dialogue_slider")
                     )
                 }
             }
@@ -729,14 +765,21 @@ fun EnhancerCard(
                 onCheckedChange = onToggleSurround,
                 testTag = "enhancer_surround_switch"
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Soundstage Width",
-                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary)
+                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                         Text(
                             text = "${(config.surroundWidth * 100).roundToInt()}%",
@@ -744,7 +787,8 @@ fun EnhancerCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = palette.primary
-                            )
+                            ),
+                            maxLines = 1
                         )
                     }
                     Slider(
@@ -757,7 +801,10 @@ fun EnhancerCard(
                             activeTrackColor = palette.primary,
                             inactiveTrackColor = palette.surface2
                         ),
-                        modifier = Modifier.testTag("enhancer_surround_slider")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("enhancer_surround_slider")
                     )
                 }
             }
