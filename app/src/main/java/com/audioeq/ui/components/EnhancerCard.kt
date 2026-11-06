@@ -109,6 +109,9 @@ fun EnhancerCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -126,51 +129,58 @@ fun EnhancerCard(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Audio Enhancers",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = palette.textPrimary
-                            )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "Adaptive profiles · Deep Bass · Virtual Bass · 20-Band IEQ",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = palette.textMuted,
                                 fontSize = 11.sp
-                            )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
                 if (config.isAnyActive()) {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(999.dp),
                         color = palette.surface2,
                         border = BorderStroke(1.dp, palette.borderSubtle),
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(999.dp))
                             .clickable(enabled = enabled) { onResetAll() }
                             .testTag("enhancer_reset_button")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.RestartAlt,
                                 contentDescription = "Reset Enhancers",
                                 tint = palette.textSecondary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                             Text(
                                 text = "Reset",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = palette.textSecondary,
                                     fontWeight = FontWeight.SemiBold
-                                )
+                                ),
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

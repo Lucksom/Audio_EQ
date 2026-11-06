@@ -730,12 +730,65 @@ object EnhancerDsp {
         return result
     }
 
-    fun computeSurroundContour31(config: EnhancerConfig, isSpeaker: Boolean = false): DoubleArray {
+    fun computeDynamicProfileSteering31(config: EnhancerConfig): DoubleArray {
+        val result = DoubleArray(31)
+        if (config.profile != AudioProfile.DYNAMIC) return result
+
+        val freqs31 = EqConstants.BAND_FREQUENCIES_31
+        val ieqFreqs = if (config.deepBassEnabled) IEQ_FREQS_20_DEEP_BASS else IEQ_FREQS_20
+
+        val balQ4 = IeqPreset.BALANCED.targetsQ4
+        val refMidDb = ((balQ4[7] + balQ4[8] + balQ4[9] + balQ4[10]) / 4.0) / 16.0
+        val musicWeight = if (config.ieqPreset == IeqPreset.OFF) 0.35 else 0.0
+        val speechWeight = if (!config.dialogueEnhancerEnabled) (4.0 / 16.0) else 0.0
+
+        val balTargetsDb = DoubleArray(20) { b ->
+            ((balQ4[b] / 16.0) - refMidDb) * musicWeight
+        }
+
+        for (i in 0 until 31) {
+            val f = freqs31[i]
+            val musicEq = interpolateLog20(f, balTargetsDb, ieqFreqs)
+            val speechFormant = (speechWeight * 4.5) * exp(-0.5 * (ln(f / 2100.0) / 0.58).pow(2.0))
+            val speechMudCut = -(speechWeight * 1.1) * exp(-0.5 * (ln(f / 220.0) / 0.38).pow(2.0))
+            result[i] = musicEq + speechFormant + speechMudCut
+        }
+        return result
+    }
+
+    fun computeDeepBassShiftDelta31(
+        userGains10: DoubleArray,
+        deepBassEnabled: Boolean
+    ): DoubleArray {
+        val result = DoubleArray(31)
+        if (!deepBassEnabled || userGains10.size < 10) return result
+        val normal20 = interpolate10To20Logarithmic(userGains10, deepBass = false)
+        val shifted20 = interpolate10To20Logarithmic(userGains10, deepBass = true)
+        val freqs31 = EqConstants.BAND_FREQUENCIES_31
+        for (i in 0 until 31) {
+            val f = freqs31[i]
+            val gNormal = interpolateLog20(f, normal20, IEQ_FREQS_20)
+            val gShifted = interpolateLog20(f, shifted20, IEQ_FREQS_20_DEEP_BASS)
+            result[i] = (gShifted - gNormal).coerceIn(-6.0, 6.0)
+        }
+        return result
+    }
+
+    fun computeSurroundContour31(
+        config: EnhancerConfig,
+        isSpeaker: Boolean = false,
+        sampleRate: Double = 48000.0
+    ): DoubleArray {
         val result = DoubleArray(31)
         if (!config.surroundEnabled || config.surroundWidth <= 0.02f) return result
 
         val w = config.surroundWidth.toDouble().coerceIn(0.0, 1.0)
         val freqs = EqConstants.BAND_FREQUENCIES_31
+        val rHead = 0.0875
+        val cSound = 343.0
+        val thetaRad = 35.0 * PI / 180.0
+        val tauSec = (rHead / cSound) * (thetaRad + sin(thetaRad))
+        val beta = 1.0 - exp(-2.0 * PI * 850.0 / sampleRate)
 
         for (i in 0 until 31) {
             val f = freqs[i]
@@ -743,6 +796,12 @@ object EnhancerDsp {
                 result[i] = 0.0
                 continue
             }
+            val omega = 2.0 * PI * f / sampleRate
+            val oneMinusBeta = 1.0 - beta
+            val denShadow = sqrt((1.0 - oneMinusBeta * cos(omega)).pow(2.0) + (oneMinusBeta * sin(omega)).pow(2.0)).coerceAtLeast(1e-6)
+            val hShadowMag = (beta / denShadow).coerceIn(0.0, 1.0)
+            val itdPhaseMod = 0.18 * w * (1.0 - hShadowMag) * cos(2.0 * PI * f * tauSec * 0.25)
+
             val sidePresence = (w * 2.2) * exp(-0.5 * (ln(f / 2800.0) / 0.42).pow(2.0))
             val pinnaNotch = -(w * 1.4) * exp(-0.5 * (ln(f / 7200.0) / 0.22).pow(2.0))
             val airShelf = (w * 2.6) / sqrt(1.0 + (9500.0 / f).pow(4.0))
@@ -750,7 +809,7 @@ object EnhancerDsp {
                 (w * 1.1) * exp(-0.5 * (ln(f / 1600.0) / 0.35).pow(2.0))
             } else 0.0
 
-            result[i] = sidePresence + pinnaNotch + airShelf + speakerDispersion
+            result[i] = sidePresence + pinnaNotch + airShelf + speakerDispersion + itdPhaseMod
         }
         return result
     }
@@ -764,11 +823,12 @@ object EnhancerDsp {
         val bass = computeBassEnhancer31(config)
         val virtBass = computeVirtualBass31(config)
         val ieq = computeIeq31(config)
+        val dynSteer = computeDynamicProfileSteering31(config)
         val de = computeDialogueEnhancer31(config)
-        val surr = computeSurroundContour31(config, isSpeaker)
+        val surr = computeSurroundContour31(config, isSpeaker, sampleRate)
 
         return DoubleArray(31) { i ->
-            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + de[i] + surr[i]).coerceIn(-12.0, 14.0)
+            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 14.0)
         }
     }
 

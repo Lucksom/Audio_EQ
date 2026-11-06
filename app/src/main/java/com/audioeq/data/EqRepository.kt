@@ -119,7 +119,7 @@ class EqRepository(context: Context) {
         private const val KEY_TRANSIENT_MODE = "transient_mode"
         private const val KEY_USB_BIT_PERFECT = "usb_bit_perfect"
         private const val KEY_THEME_MODE = "theme_mode"
-        private const val KEY_SEED_HEX = "seed_hex"
+        private const val KEY_SEED_HEX = "seed_hex_v2"
         private const val KEY_WALLPAPER_EXTRACT = "wallpaper_extract"
         private const val KEY_MUSIC_ONLY_TRACKING = "music_only_tracking"
     }

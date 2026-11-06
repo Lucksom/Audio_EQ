@@ -13,12 +13,43 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
 
+fun normalizeAutoEqFast(s: String): String {
+    val out = StringBuilder(s.length)
+    for (i in 0 until s.length) {
+        val c = s[i].lowercaseChar()
+        if (c in 'a'..'z' || c in '0'..'9') {
+            out.append(c)
+        }
+    }
+    return out.toString()
+}
+
 data class AutoEqEntry(
     val name: String,
     val source: String,
     val form: String,
     val path: String
-)
+) {
+    val nameLower: String = name.lowercase(Locale.US)
+    val nameNorm: String = normalizeAutoEqFast(nameLower)
+    val sourceLower: String = source.lowercase(Locale.US)
+    val formLower: String = form.lowercase(Locale.US)
+    val sourceRank: Int = when (sourceLower) {
+        "oratory1990" -> 0
+        "crinacle" -> 1
+        "rtings" -> 2
+        else -> 3
+    }
+    private val categoryKeywords: String = when {
+        formLower.contains("in-ear") || formLower.contains("711") || formLower.contains("5128") || formLower.contains("iem") ->
+            "in-ear inear iem earphone earphones earbud earbuds buds tws"
+        formLower.contains("earbud") ->
+            "earbud earbuds tws earphone earphones buds in-ear inear"
+        else ->
+            "over-ear overear headphone headphones on-ear"
+    }
+    val searchableText: String = "$nameLower $sourceLower $formLower $categoryKeywords"
+}
 
 enum class AutoEqKind(val suffix: String) {
     PARAMETRIC(" ParametricEQ.txt"),
@@ -33,12 +64,12 @@ class AutoEqRepository(private val context: Context) {
     private val cacheDir = File(context.filesDir, "autoeq").apply { mkdirs() }
     private val remoteIndexCacheFile = File(cacheDir, "remote_index.json")
 
-    private val mdIndexRegex = Regex(
-        """^\s*[-*]\s+\[([^\]]+)]\(\.?/?([^)]+)\)\s+by\s+([^\n]+?)(?:\s+on\s+([^\n]+))?\s*$"""
-    )
+    @Volatile
+    private var cachedIndexMemory: List<AutoEqEntry>? = null
 
-    suspend fun loadBundledIndex(): List<AutoEqEntry> = withContext(Dispatchers.IO) {
-        val merged = LinkedHashMap<String, AutoEqEntry>()
+    suspend fun loadBundledIndex(): List<AutoEqEntry> = withContext(Dispatchers.Default) {
+        cachedIndexMemory?.let { if (it.isNotEmpty()) return@withContext it }
+        val merged = LinkedHashMap<String, AutoEqEntry>(9200)
         readIndexJsonFile(remoteIndexCacheFile).forEach { entry ->
             merged["${entry.name}|${entry.source}|${entry.form}"] = entry
         }
@@ -52,17 +83,21 @@ class AutoEqRepository(private val context: Context) {
             }
         } catch (_: Exception) {
         }
-        merged.values.toList()
+        val list = merged.values.toList()
+        if (list.isNotEmpty()) {
+            cachedIndexMemory = list
+        }
+        list
     }
 
     suspend fun loadIndex(forceRefresh: Boolean = false): List<AutoEqEntry> = withContext(Dispatchers.IO) {
         val localEntries = loadBundledIndex()
-        if (!forceRefresh && localEntries.size >= 1000) {
+        if (!forceRefresh && localEntries.isNotEmpty()) {
             return@withContext localEntries
         }
         val remoteEntries = fetchRemoteIndex()
         if (remoteEntries.isNotEmpty()) {
-            val merged = LinkedHashMap<String, AutoEqEntry>()
+            val merged = LinkedHashMap<String, AutoEqEntry>(remoteEntries.size + 256)
             remoteEntries.forEach { entry ->
                 merged["${entry.name}|${entry.source}|${entry.form}"] = entry
             }
@@ -72,7 +107,9 @@ class AutoEqRepository(private val context: Context) {
                     merged[key] = entry
                 }
             }
-            return@withContext merged.values.toList()
+            val combined = merged.values.toList()
+            cachedIndexMemory = combined
+            return@withContext combined
         }
         localEntries
     }
@@ -80,8 +117,9 @@ class AutoEqRepository(private val context: Context) {
     suspend fun fetchRemoteIndex(): List<AutoEqEntry> = withContext(Dispatchers.IO) {
         try {
             val conn = URL(indexUrl).openConnection() as HttpURLConnection
+            conn.setRequestProperty("User-Agent", "AudioEQ/1.0")
             conn.connectTimeout = 8_000
-            conn.readTimeout = 12_000
+            conn.readTimeout = 15_000
             try {
                 if (conn.responseCode == 200) {
                     val md = conn.inputStream.bufferedReader().use { it.readText() }
@@ -100,22 +138,46 @@ class AutoEqRepository(private val context: Context) {
     }
 
     fun parseIndexMarkdown(md: String): List<AutoEqEntry> {
-        return md.lineSequence().mapNotNull { line ->
-            val m = mdIndexRegex.matchEntire(line) ?: return@mapNotNull null
-            val name = m.groupValues[1].trim()
-            val rawPath = m.groupValues[2].trim().removePrefix("./").removePrefix("/")
-            val decodedPath = decodeSegment(rawPath)
+        val out = ArrayList<AutoEqEntry>(8900)
+        for (rawLine in md.lineSequence()) {
+            val line = rawLine.trim()
+            if (!line.startsWith("- [") && !line.startsWith("* [")) continue
+            val splitPos = line.indexOf("](")
+            if (splitPos <= 3) continue
+            val name = line.substring(3, splitPos).trim()
+            val rest = line.substring(splitPos + 2)
+            val byPos = rest.lastIndexOf(") by ")
+            val rawPath: String
+            val tail: String
+            if (byPos != -1) {
+                rawPath = rest.substring(0, byPos).trim()
+                tail = rest.substring(byPos + 5).trim()
+            } else {
+                val closePos = rest.lastIndexOf(')')
+                if (closePos == -1) continue
+                rawPath = rest.substring(0, closePos).trim()
+                val rawTail = rest.substring(closePos + 1).trim()
+                tail = if (rawTail.startsWith("by ")) rawTail.substring(3).trim() else rawTail
+            }
+            val cleanRawPath = rawPath.removePrefix("./").removePrefix("/")
+            val decodedPath = decodeSegment(cleanRawPath)
             val parts = decodedPath.split("/")
-            val source = m.groupValues[3].trim().ifEmpty { parts.getOrNull(0) ?: "oratory1990" }
+            val onIdx = tail.indexOf(" on ")
+            val sourcePart = if (onIdx != -1) tail.substring(0, onIdx).trim() else tail.trim()
+            val rigPart = if (onIdx != -1) tail.substring(onIdx + 4).trim() else ""
+            val source = sourcePart.ifEmpty { parts.getOrNull(0) ?: "oratory1990" }
             val form = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
-                ?: m.groupValues[4].trim().ifEmpty { "in-ear" }
-            AutoEqEntry(
-                name = name,
-                source = source,
-                form = form,
-                path = decodedPath
+                ?: rigPart.ifEmpty { "in-ear" }
+            out.add(
+                AutoEqEntry(
+                    name = name,
+                    source = source,
+                    form = form,
+                    path = decodedPath
+                )
             )
-        }.toList()
+        }
+        return out
     }
 
     private fun readIndexJsonFile(file: File): List<AutoEqEntry> {
@@ -159,53 +221,67 @@ class AutoEqRepository(private val context: Context) {
     fun search(index: List<AutoEqEntry>, query: String, limit: Int = 50): List<AutoEqEntry> {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
-        val qNorm = normalize(trimmed)
+        val rawLower = trimmed.lowercase(Locale.US)
+        val qNorm = normalizeAutoEqFast(rawLower)
         if (qNorm.isEmpty()) return emptyList()
-        val tokens = trimmed.lowercase(Locale.US)
-            .split(Regex("[^a-z0-9]+"))
-            .filter { it.isNotEmpty() }
+        val tokens = splitAlphaNumTokens(rawLower)
 
-        return index.asSequence()
-            .filter { entry ->
-                val nameNorm = normalize(entry.name)
-                if (nameNorm.contains(qNorm)) {
-                    true
-                } else {
-                    val searchable = buildSearchableText(entry)
-                    tokens.all { token -> searchable.contains(token) }
+        val matched = ArrayList<AutoEqEntry>(64)
+        for (i in 0 until index.size) {
+            val entry = index[i]
+            val isMatch = if (entry.nameNorm.contains(qNorm)) {
+                true
+            } else {
+                var allFound = tokens.isNotEmpty()
+                for (tIdx in 0 until tokens.size) {
+                    if (!entry.searchableText.contains(tokens[tIdx])) {
+                        allFound = false
+                        break
+                    }
                 }
+                allFound
             }
-            .sortedWith(
-                compareBy(
-                    { matchTier(it, qNorm, trimmed.lowercase(Locale.US)) },
-                    { sourceRank(it.source) },
-                    { it.name.length }
-                )
-            )
-            .take(limit)
-            .toList()
+            if (isMatch) {
+                matched.add(entry)
+            }
+        }
+
+        matched.sortWith(
+            Comparator { a, b ->
+                val tierA = matchTier(a, qNorm, rawLower)
+                val tierB = matchTier(b, qNorm, rawLower)
+                if (tierA != tierB) return@Comparator tierA - tierB
+                if (a.sourceRank != b.sourceRank) return@Comparator a.sourceRank - b.sourceRank
+                a.name.length - b.name.length
+            }
+        )
+        return if (matched.size > limit) matched.subList(0, limit) else matched
     }
 
-    private fun buildSearchableText(entry: AutoEqEntry): String {
-        val fLower = entry.form.lowercase(Locale.US)
-        val categoryKeywords = when {
-            fLower.contains("in-ear") || fLower.contains("711") || fLower.contains("5128") ->
-                "in-ear inear iem earphone earphones earbud earbuds buds"
-            fLower.contains("earbud") ->
-                "earbud earbuds tws earphone earphones buds"
-            else ->
-                "over-ear overear headphone headphones on-ear"
+    private fun splitAlphaNumTokens(s: String): List<String> {
+        val result = ArrayList<String>(4)
+        val current = StringBuilder()
+        for (i in 0 until s.length) {
+            val c = s[i]
+            if (c in 'a'..'z' || c in '0'..'9') {
+                current.append(c)
+            } else if (current.isNotEmpty()) {
+                result.add(current.toString())
+                current.setLength(0)
+            }
         }
-        return "${entry.name.lowercase(Locale.US)} ${entry.source.lowercase(Locale.US)} $fLower $categoryKeywords"
+        if (current.isNotEmpty()) {
+            result.add(current.toString())
+        }
+        return result
     }
 
     private fun matchTier(entry: AutoEqEntry, qNorm: String, rawLower: String): Int {
-        val nameNorm = normalize(entry.name)
-        val nameLower = entry.name.lowercase(Locale.US)
+        val nameNorm = entry.nameNorm
         return when {
             nameNorm == qNorm -> 0
             nameNorm.startsWith(qNorm) -> 1
-            nameLower.contains(rawLower) -> 2
+            entry.nameLower.contains(rawLower) -> 2
             nameNorm.contains(qNorm) -> 3
             else -> 4
         }
@@ -215,9 +291,9 @@ class AutoEqRepository(private val context: Context) {
         val q = normalize(productName)
         if (q.length < 4) return null
         return index.filter {
-            val n = normalize(it.name)
+            val n = it.nameNorm
             n.contains(q) || q.contains(n)
-        }.minWithOrNull(compareBy({ sourceRank(it.source) }, { it.name.length }))
+        }.minWithOrNull(compareBy({ it.sourceRank }, { it.name.length }))
     }
 
     suspend fun fetch(entry: AutoEqEntry, kind: AutoEqKind): String = withContext(Dispatchers.IO) {
@@ -231,10 +307,13 @@ class AutoEqRepository(private val context: Context) {
             if (existing.isNotBlank()) return@withContext existing
         }
 
+        val cleanPathSegments = entry.path.split("/").filter { it.isNotEmpty() }.map { decodeSegment(it) }
+        val encodedSegments = cleanPathSegments.map { encodeSegment(it) } + encodeSegment(fileName)
+        val url = (listOf(baseUrl) + encodedSegments).joinToString("/")
+
         try {
-            val encodedSegments = entry.path.split("/").map { encodeSegment(it) } + encodeSegment(fileName)
-            val url = (listOf(baseUrl) + encodedSegments).joinToString("/")
             val conn = URL(url).openConnection() as HttpURLConnection
+            conn.setRequestProperty("User-Agent", "AudioEQ/1.0")
             conn.connectTimeout = 8_000
             conn.readTimeout = 10_000
             try {
@@ -276,7 +355,7 @@ class AutoEqRepository(private val context: Context) {
     }
 
     private fun synthesizeOfflineFile(entry: AutoEqEntry, kind: AutoEqKind): String {
-        val q = normalize(entry.name)
+        val q = entry.nameNorm
         val builtIn = EqConstants.BUILT_IN_HEADPHONE_PROFILES.firstOrNull {
             it.id != "none" && (normalize(it.name).contains(q) || q.contains(normalize(it.name)))
         }
@@ -350,7 +429,7 @@ class AutoEqRepository(private val context: Context) {
         }
     }
 
-    fun normalize(s: String): String = s.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+    fun normalize(s: String): String = normalizeAutoEqFast(s)
 
     fun sourceRank(source: String): Int = when (source.lowercase(Locale.US)) {
         "oratory1990" -> 0

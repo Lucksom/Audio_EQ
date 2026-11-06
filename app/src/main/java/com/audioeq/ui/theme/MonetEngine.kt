@@ -74,20 +74,20 @@ data class MonetPalette(
 }
 
 val LocalMonetPalette = staticCompositionLocalOf {
-    MonetEngine.buildPalette(seedHex = "#6750a4", dark = false)
+    MonetEngine.buildPalette(seedHex = "#006a6a", dark = false)
 }
 
 object MonetEngine {
 
-    const val DEFAULT_SEED_HEX = "#5B8CFF"
+    const val DEFAULT_SEED_HEX = "#006A6A"
 
     val PRESET_SWATCHES = listOf(
-        "#6750a4",
-        "#0061a4",
+        "#006a6a",
         "#006e1c",
         "#984061",
         "#a04a00",
-        "#006a6a",
+        "#0061a4",
+        "#6750a4",
         "#7d5260",
         "#b3261e"
     )

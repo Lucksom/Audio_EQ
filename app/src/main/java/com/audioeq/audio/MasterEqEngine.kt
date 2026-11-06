@@ -739,12 +739,15 @@ class MasterEqEngine(
 
         val hearingL31 = interpolateHearingTo31(params.hearingCurve, isRight = false)
         val hearingR31 = interpolateHearingTo31(params.hearingCurve, isRight = true)
+        val rawRight10 = if (params.splitLREnabled) params.bandGains10R else params.bandGains10L
+        val deepBassShiftL31 = EnhancerDsp.computeDeepBassShiftDelta31(params.bandGains10L, cfg.deepBassEnabled)
+        val deepBassShiftR31 = EnhancerDsp.computeDeepBassShiftDelta31(rawRight10, cfg.deepBassEnabled)
 
         val calL = DoubleArray(31) {
-            (calCurve[it] + hearingL31[it]).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingL31[it] + deepBassShiftL31[it]).coerceIn(-15.0, 15.0)
         }
         val calR = DoubleArray(31) {
-            (calCurve[it] + hearingR31[it]).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingR31[it] + deepBassShiftR31[it]).coerceIn(-15.0, 15.0)
         }
 
         val targetL31 = Dsp.compute31BandTargets(
@@ -755,7 +758,6 @@ class MasterEqEngine(
             volIdx = volIdx,
             volMax = volMax
         )
-        val rawRight10 = if (params.splitLREnabled) params.bandGains10R else params.bandGains10L
         val targetR31 = Dsp.compute31BandTargets(
             userGains10 = rawRight10,
             cal31 = calR,

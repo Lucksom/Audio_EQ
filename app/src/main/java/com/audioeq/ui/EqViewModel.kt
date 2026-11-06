@@ -104,7 +104,7 @@ data class EqUiState(
     val musicOnlyTrackingEnabled: Boolean = true,
     val selectedMusicPackages: Set<String> = emptySet(),
     val themeMode: String = "light",
-    val seedHex: String = "#5B8CFF",
+    val seedHex: String = "#006A6A",
     val isSeedFromWallpaper: Boolean = false,
     val showSavePresetDialog: Boolean = false,
     val showRootWarningDialog: Boolean = false,
@@ -405,6 +405,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             isSpeaker = p1.activeRoute == OutputRoute.SPEAKER,
             sampleRate = p2.diagnostics.hardwareSampleRateHz.toDouble()
         )
+        val deepShift31 = EnhancerDsp.computeDeepBassShiftDelta31(
+            userGains10 = sliderGains.map { (it * p1.intensity).toDouble() }.toDoubleArray(),
+            deepBassEnabled = p1.enhancerConfig.deepBassEnabled
+        )
         val baseWithTone10 = EqConstants.FREQ_10_BAND.indices.map { i ->
             val eqGain = if (p1.isEqEnabled) sliderGains.getOrElse(i) { 0f } * p1.intensity else 0f
             val fHz = EqConstants.FREQ_10_BAND[i].toDouble()
@@ -424,7 +428,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 val nearestIdx = EqConstants.BAND_FREQUENCIES_31.indices.minByOrNull {
                     kotlin.math.abs(EqConstants.BAND_FREQUENCIES_31[it] - fHz)
                 } ?: 0
-                val enhOffset = enh31.getOrElse(nearestIdx) { 0.0 }.toFloat()
+                val enhOffset = (enh31.getOrElse(nearestIdx) { 0.0 } + deepShift31.getOrElse(nearestIdx) { 0.0 }).toFloat()
                 (baseWithTone10.getOrElse(i) { 0f } + enhOffset).coerceIn(-12.0f, 12.0f)
             }
         }
@@ -519,7 +523,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             if (bundledIndex.isNotEmpty()) {
                 _autoEqIndex.value = bundledIndex
             }
-            val fullIndex = autoEqRepository.loadIndex(forceRefresh = false)
+            val fullIndex = autoEqRepository.loadIndex(forceRefresh = true)
             if (fullIndex.isNotEmpty()) {
                 _autoEqIndex.value = fullIndex
             }

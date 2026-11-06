@@ -20,7 +20,7 @@ val AppShapes = Shapes(
 @Composable
 fun AudioEqTheme(
     themeMode: String = "light",
-    seedHex: String = "#6750a4",
+    seedHex: String = "#006a6a",
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit,

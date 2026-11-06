@@ -52,14 +52,19 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import com.audioeq.audio.AutoEqEntry
+import com.audioeq.audio.normalizeAutoEqFast
 import com.audioeq.model.EngineMode
 import com.audioeq.model.HeadphoneProfile
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PresetConfig
 import com.audioeq.shizuku.ShizukuState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
@@ -504,63 +509,77 @@ fun AutoEqCard(
     val isProfileActive = selectedProfile != null && selectedProfile.id != "none"
 
     val trimmedQuery = remember(searchQuery) { searchQuery.trim() }
-    val normalizedQuery = remember(trimmedQuery) {
-        trimmedQuery.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
-    }
-    val matchingEntries = remember(autoEqIndex, trimmedQuery, normalizedQuery) {
-        if (normalizedQuery.isEmpty()) {
-            emptyList()
+    val normalizedQuery = remember(trimmedQuery) { normalizeAutoEqFast(trimmedQuery) }
+    val matchingEntries by produceState(
+        initialValue = emptyList<AutoEqEntry>(),
+        key1 = normalizedQuery,
+        key2 = autoEqIndex
+    ) {
+        if (normalizedQuery.isEmpty() || autoEqIndex.isEmpty()) {
+            value = emptyList()
         } else {
-            val tokens = trimmedQuery.lowercase(Locale.US)
-                .split(Regex("[^a-z0-9]+"))
-                .filter { it.isNotEmpty() }
-            val rawLower = trimmedQuery.lowercase(Locale.US)
+            if (normalizedQuery.length <= 2) {
+                delay(40L)
+            }
+            value = withContext(Dispatchers.Default) {
+                val rawLower = trimmedQuery.lowercase(Locale.US)
+                val tokens = buildList {
+                    val cur = StringBuilder()
+                    for (i in 0 until rawLower.length) {
+                        val c = rawLower[i]
+                        if (c in 'a'..'z' || c in '0'..'9') {
+                            cur.append(c)
+                        } else if (cur.isNotEmpty()) {
+                            add(cur.toString())
+                            cur.setLength(0)
+                        }
+                    }
+                    if (cur.isNotEmpty()) add(cur.toString())
+                }
 
-            autoEqIndex.asSequence()
-                .filter { entry ->
-                    val nameNorm = entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
-                    if (nameNorm.contains(normalizedQuery)) {
+                val matched = ArrayList<AutoEqEntry>(64)
+                for (i in 0 until autoEqIndex.size) {
+                    val entry = autoEqIndex[i]
+                    val isHit = if (entry.nameNorm.contains(normalizedQuery)) {
                         true
                     } else {
-                        val fLower = entry.form.lowercase(Locale.US)
-                        val catKeywords = when {
-                            fLower.contains("in-ear") || fLower.contains("711") || fLower.contains("5128") ->
-                                "in-ear inear iem earphone earphones earbud earbuds buds"
-                            fLower.contains("earbud") ->
-                                "earbud earbuds tws earphone earphones buds"
-                            else ->
-                                "over-ear overear headphone headphones on-ear"
+                        var allTokens = tokens.isNotEmpty()
+                        for (t in 0 until tokens.size) {
+                            if (!entry.searchableText.contains(tokens[t])) {
+                                allTokens = false
+                                break
+                            }
                         }
-                        val searchable = "${entry.name.lowercase(Locale.US)} ${entry.source.lowercase(Locale.US)} $fLower $catKeywords"
-                        tokens.all { token -> searchable.contains(token) }
+                        allTokens
+                    }
+                    if (isHit) {
+                        matched.add(entry)
                     }
                 }
-                .sortedWith(
-                    compareBy(
-                        {
-                            val nameNorm = it.nameNorm()
-                            val nameLower = it.name.lowercase(Locale.US)
-                            when {
-                                nameNorm == normalizedQuery -> 0
-                                nameNorm.startsWith(normalizedQuery) -> 1
-                                nameLower.contains(rawLower) -> 2
-                                nameNorm.contains(normalizedQuery) -> 3
-                                else -> 4
-                            }
-                        },
-                        {
-                            when (it.source.lowercase(Locale.US)) {
-                                "oratory1990" -> 0
-                                "crinacle" -> 1
-                                "rtings" -> 2
-                                else -> 3
-                            }
-                        },
-                        { it.name.length }
-                    )
+
+                matched.sortWith(
+                    Comparator { a, b ->
+                        val tierA = when {
+                            a.nameNorm == normalizedQuery -> 0
+                            a.nameNorm.startsWith(normalizedQuery) -> 1
+                            a.nameLower.contains(rawLower) -> 2
+                            a.nameNorm.contains(normalizedQuery) -> 3
+                            else -> 4
+                        }
+                        val tierB = when {
+                            b.nameNorm == normalizedQuery -> 0
+                            b.nameNorm.startsWith(normalizedQuery) -> 1
+                            b.nameLower.contains(rawLower) -> 2
+                            b.nameNorm.contains(normalizedQuery) -> 3
+                            else -> 4
+                        }
+                        if (tierA != tierB) return@Comparator tierA - tierB
+                        if (a.sourceRank != b.sourceRank) return@Comparator a.sourceRank - b.sourceRank
+                        a.name.length - b.name.length
+                    }
                 )
-                .take(20)
-                .toList()
+                if (matched.size > 20) ArrayList(matched.subList(0, 20)) else matched
+            }
         }
     }
 
@@ -800,7 +819,7 @@ fun AutoEqCard(
                                         shape = RoundedCornerShape(12.dp)
                                     )
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    .testTag("autoeq_row_${entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "_")}"),
+                                    .testTag("autoeq_row_${entry.nameNorm}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -830,7 +849,7 @@ fun AutoEqCard(
                                         .background(if (isCurrent) palette.primary else palette.primaryC)
                                         .clickable(enabled = masterEnabled) { onApplyAutoEqEntry(entry) }
                                         .padding(horizontal = 12.dp, vertical = 6.dp)
-                                        .testTag("autoeq_use_${entry.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "_")}")
+                                        .testTag("autoeq_use_${entry.nameNorm}")
                                 ) {
                                     Text(
                                         text = if (isCurrent) "Active" else "Use this",
@@ -860,8 +879,5 @@ fun AutoEqCard(
         }
     }
 }
-
-private fun AutoEqEntry.nameNorm(): String =
-    name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
 
 

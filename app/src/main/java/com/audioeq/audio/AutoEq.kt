@@ -280,18 +280,35 @@ data class AutoEqFetchResult(
 
 object AutoEq {
 
-    private val INDEX_LINE = Regex(
-        """^\s*[-*]\s+\[([^\]]+)]\(([^)]+)\)(?:\s+by\s+([^()\n]+?))?(?:\s+on\s+([^\n]+))?\s*$"""
-    )
-
     fun parseIndexMd(md: String): List<IndexEntry> =
-        md.lineSequence().mapNotNull { line ->
-            val m = INDEX_LINE.matchEntire(line) ?: return@mapNotNull null
+        md.lineSequence().mapNotNull { rawLine ->
+            val line = rawLine.trim()
+            if (!line.startsWith("- [") && !line.startsWith("* [")) return@mapNotNull null
+            val splitPos = line.indexOf("](")
+            if (splitPos <= 3) return@mapNotNull null
+            val name = line.substring(3, splitPos).trim()
+            val rest = line.substring(splitPos + 2)
+            val byPos = rest.lastIndexOf(") by ")
+            val rawPath: String
+            val tail: String
+            if (byPos != -1) {
+                rawPath = rest.substring(0, byPos).trim()
+                tail = rest.substring(byPos + 5).trim()
+            } else {
+                val closePos = rest.lastIndexOf(')')
+                if (closePos == -1) return@mapNotNull null
+                rawPath = rest.substring(0, closePos).trim()
+                val rawTail = rest.substring(closePos + 1).trim()
+                tail = if (rawTail.startsWith("by ")) rawTail.substring(3).trim() else rawTail
+            }
+            val onIdx = tail.indexOf(" on ")
+            val sourcePart = if (onIdx != -1) tail.substring(0, onIdx).trim() else tail.trim()
+            val rigPart = if (onIdx != -1) tail.substring(onIdx + 4).trim() else ""
             IndexEntry(
-                name = m.groupValues[1].trim(),
-                relPath = m.groupValues[2].trim().removePrefix("./"),
-                source = m.groupValues[3].trim().ifEmpty { null },
-                rig = m.groupValues[4].trim().ifEmpty { null }
+                name = name,
+                relPath = rawPath.removePrefix("./").removePrefix("/"),
+                source = sourcePart.ifEmpty { null },
+                rig = rigPart.ifEmpty { null }
             )
         }.toList()
 
@@ -600,7 +617,7 @@ class AutoEqRepo(private val context: Context) {
     }
 
     suspend fun loadIndex(forceRefresh: Boolean = false): AutoEqFetchResult = withContext(Dispatchers.IO) {
-        val assetEntries = repository.loadIndex()
+        val assetEntries = repository.loadIndex(forceRefresh = forceRefresh)
         if (assetEntries.isNotEmpty()) {
             val mapped = assetEntries.map {
                 IndexEntry(
