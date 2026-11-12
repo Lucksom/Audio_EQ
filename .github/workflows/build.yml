@@ -23,7 +23,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up JDK 21 with Dependency Cache
         uses: actions/setup-java@v4
@@ -84,6 +84,61 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
+      - name: Compute Synchronized Version and Release Changelog
+        id: version_meta
+        run: |
+          APP_VERSION_CODE=$((GITHUB_RUN_NUMBER * 10 + GITHUB_RUN_ATTEMPT))
+          APP_VERSION_NAME="1.0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          TAG_NAME="v${APP_VERSION_NAME}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          echo "APP_VERSION_CODE=${APP_VERSION_CODE}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_NAME=${APP_VERSION_NAME}" >> "$GITHUB_ENV"
+          echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_ENV"
+
+          git fetch --tags --force || true
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG_NAME}$" | head -n 1 || true)
+
+          NOTES_FILE="${GITHUB_WORKSPACE}/release_notes.md"
+          {
+            echo "## Audio EQ ${TAG_NAME}"
+            echo ""
+            echo "### What's Changed"
+            if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+              COMMITS=$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s (\`%h\`)" || true)
+              if [ -n "$COMMITS" ]; then
+                echo "$COMMITS"
+              else
+                git log -1 --pretty=format:"- %s (\`%h\`)"
+              fi
+              echo ""
+              echo ""
+              echo "**Changes since \`${PREV_TAG}\`:**"
+              echo '```'
+              git diff --stat "${PREV_TAG}..HEAD" | tail -n 25 || true
+              echo '```'
+            else
+              COMMITS=$(git log -n 15 --no-merges --pretty=format:"- %s (\`%h\`)" || true)
+              if [ -n "$COMMITS" ]; then
+                echo "$COMMITS"
+              else
+                echo "- Initial release build (${SHORT_SHA})"
+              fi
+              echo ""
+              echo ""
+              echo "**Latest commit details:**"
+              git log -1 --pretty=format:"%b" || true
+              echo ""
+              echo '```'
+              git diff-tree --no-commit-id --stat -r HEAD | tail -n 25 || true
+              echo '```'
+            fi
+            echo ""
+            echo "---"
+            echo "- **App Version:** \`${APP_VERSION_NAME}\` (versionCode \`${APP_VERSION_CODE}\`)"
+            echo "- **Commit:** \`${GITHUB_SHA}\` (Run #${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT})"
+          } > "$NOTES_FILE"
+
       - name: Build Signed Release APK (Max Free Runner Performance)
         run: |
           GRADLE_CMD="gradle"
@@ -95,6 +150,9 @@ jobs:
             --parallel \
             --build-cache \
             --configuration-cache \
+            -PversionCode="${{ env.APP_VERSION_CODE }}" \
+            -PversionName="${{ env.APP_VERSION_NAME }}" \
+            -PgithubRepo="${{ github.repository }}" \
             -Dorg.gradle.jvmargs="-Xmx12g -XX:+UseParallelGC -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
             -Dorg.gradle.workers.max=4 \
             -Dorg.gradle.vfs.watch=true \
@@ -109,7 +167,7 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
-      - name: Generate Unique Tag & Prepare Release APK
+      - name: Prepare Versioned Release APK
         id: prepare_apk
         run: |
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
@@ -117,13 +175,11 @@ jobs:
             echo "Error: Release APK not found!"
             exit 1
           fi
-          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
-          UNIQUE_TAG="v1.0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${TIMESTAMP}"
-          RELEASE_APK_NAME="AudioEQ-${UNIQUE_TAG}.apk"
+          RELEASE_APK_NAME="AudioEQ-${TAG_NAME}.apk"
           cp "$APK_PATH" "${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}"
           echo "apk_path=${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
           echo "apk_name=${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${UNIQUE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Create New GitHub Release with APK
         uses: softprops/action-gh-release@v2
@@ -131,13 +187,8 @@ jobs:
           tag_name: ${{ steps.prepare_apk.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
           name: "Audio EQ ${{ steps.prepare_apk.outputs.tag_name }}"
-          body: |
-            ### Audio EQ Android Release (`${{ steps.prepare_apk.outputs.tag_name }}`)
-            - **Commit**: `${{ github.sha }}` (Run #${{ github.run_number }}.${{ github.run_attempt }})
-            - **Master Equalizer Engine (v6)**: 10-Band UI (`31 Hz–16 kHz`) mapped to 31-Band ISO Third-Octave DSP (`20 Hz–20 kHz`) and 20-Band Bark/ERB (`47 Hz–19,688 Hz`)
-            - **Acoustic Profiles & Enhancers**: Dynamic, Movie, Music, Voice + Deeper Bass, Surround Audio, Enhance Beats, Enhance Vocal
-            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), plus Custom SQLite (`equalizer.db`) presets
-            - **3 Engine Modes**: Legacy (Global AudioSession 0), ADB/Shizuku (31-band DynamicsProcessing + OEM DAX reflection), and Root (RAM-only helper)
+          body_path: ${{ github.workspace }}/release_notes.md
+          generate_release_notes: true
           files: ${{ steps.prepare_apk.outputs.apk_path }}
           draft: false
           prerelease: false

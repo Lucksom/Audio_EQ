@@ -72,4 +72,29 @@ class AudioEqRobolectricTest {
         val tenBand = AutoEqMapper.fixedBandToTenBand(parsedFb)
         assertEquals(10, tenBand.gainsDb.size)
     }
+
+    @Test
+    fun `verify GitHub release JSON parsing extracts version changelog and apk asset`() {
+        val sampleJson = """
+            {
+              "tag_name": "v1.0.18.1",
+              "name": "Audio EQ v1.0.18.1",
+              "body": "### What's Changed\n- Fixed Shizuku/Root status badge",
+              "published_at": "2026-11-12T10:00:00Z",
+              "html_url": "https://github.com/user/AudioEQ/releases/tag/v1.0.18.1",
+              "assets": [
+                {
+                  "name": "AudioEQ-v1.0.18.1.apk",
+                  "size": 12345678,
+                  "browser_download_url": "https://github.com/user/AudioEQ/releases/download/v1.0.18.1/AudioEQ-v1.0.18.1.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = com.audioeq.data.GitHubUpdateChecker.parseReleaseJsonObject(org.json.JSONObject(sampleJson))
+        assertNotNull(parsed)
+        assertEquals("v1.0.18.1", parsed!!.tagName)
+        assertEquals("AudioEQ-v1.0.18.1.apk", parsed.apkFileName)
+        assertTrue(parsed.changelog.contains("Fixed Shizuku/Root status badge"))
+    }
 }

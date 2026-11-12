@@ -342,4 +342,23 @@ class AudioEqUnitTest {
             assertTrue("Bass enhancer must not attenuate mids/treble", bass31[i] >= 0.0)
         }
     }
+
+    @Test
+    fun verifyGitHubUpdateCheckerNormalizationVersioningAndParsing() {
+        assertEquals("user/AudioEQ", com.audioeq.data.GitHubUpdateChecker.normalizeRepoSlug("user/AudioEQ"))
+        assertEquals(
+            "user/AudioEQ",
+            com.audioeq.data.GitHubUpdateChecker.normalizeRepoSlug("https://github.com/user/AudioEQ/releases")
+        )
+        assertEquals(
+            "user/AudioEQ",
+            com.audioeq.data.GitHubUpdateChecker.normalizeRepoSlug("git@github.com:user/AudioEQ.git")
+        )
+        assertEquals(null, com.audioeq.data.GitHubUpdateChecker.normalizeRepoSlug("invalid"))
+
+        assertTrue(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.15.1", "1.0.2"))
+        assertTrue(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.15.2-20261112", "1.0.15.1"))
+        assertFalse(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.15.1", "1.0.15.1"))
+        assertFalse(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.2", "1.0.15.1"))
+    }
 }

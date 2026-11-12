@@ -130,7 +130,10 @@ class AudioEngineController(
     private fun isPrivilegeReadyForMode(mode: EngineMode): Boolean {
         return when (mode) {
             EngineMode.ROOT -> shizukuManager.isRootAvailable()
-            EngineMode.ADB_SHIZUKU -> shizukuManager.state.value == ShizukuState.READY || hasDumpPermission()
+            EngineMode.ADB_SHIZUKU ->
+                shizukuManager.state.value == ShizukuState.READY ||
+                    hasDumpPermission() ||
+                    shizukuManager.isRootAvailable()
             EngineMode.LEGACY -> true
         }
     }

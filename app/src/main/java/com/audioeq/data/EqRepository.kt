@@ -2,6 +2,7 @@ package com.audioeq.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.audioeq.BuildConfig
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.AutoEq
 import com.audioeq.audio.EnhancerConfig
@@ -96,6 +97,9 @@ class EqRepository(context: Context) {
     )
     val musicOnlyTracking: StateFlow<Boolean> = _musicOnlyTracking.asStateFlow()
 
+    private val _githubRepo = MutableStateFlow(loadInitialGithubRepo())
+    val githubRepo: StateFlow<String> = _githubRepo.asStateFlow()
+
     private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
         when (key) {
             KEY_MASTER_ENABLED -> _masterEnabled.value = sp.getBoolean(KEY_MASTER_ENABLED, true)
@@ -122,6 +126,19 @@ class EqRepository(context: Context) {
         private const val KEY_SEED_HEX = "seed_hex_v2"
         private const val KEY_WALLPAPER_EXTRACT = "wallpaper_extract"
         private const val KEY_MUSIC_ONLY_TRACKING = "music_only_tracking"
+        private const val KEY_GITHUB_REPO = "github_repo"
+    }
+
+    private fun loadInitialGithubRepo(): String {
+        val saved = prefs.getString(KEY_GITHUB_REPO, null)?.trim().orEmpty()
+        if (saved.isNotEmpty()) return saved
+        return BuildConfig.GITHUB_REPO.trim()
+    }
+
+    fun setGithubRepo(repoSlug: String) {
+        val cleaned = GitHubUpdateChecker.normalizeRepoSlug(repoSlug) ?: repoSlug.trim()
+        prefs.edit().putString(KEY_GITHUB_REPO, cleaned).apply()
+        _githubRepo.value = cleaned
     }
 
     private fun loadEngineMode(): EngineMode {

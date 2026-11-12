@@ -236,7 +236,11 @@ fun ModeSelectorCard(
                                 ShizukuState.UNSUPPORTED_VERSION -> "Update Shizuku App"
                                 ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Permission"
                                 ShizukuState.DENIED_PERMANENTLY -> "Re-allow in Shizuku App"
-                                ShizukuState.READY -> "Shizuku Ready ($shizukuPrivilege) · Grant DUMP"
+                                ShizukuState.READY -> if (diagnostics.dumpPermissionGranted) {
+                                    "Shizuku Ready ($shizukuPrivilege) · DUMP Active"
+                                } else {
+                                    "Shizuku Ready ($shizukuPrivilege) · Sync DUMP"
+                                }
                             }
                             Button(
                                 onClick = onShizukuAction,

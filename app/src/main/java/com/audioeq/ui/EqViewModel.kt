@@ -22,6 +22,8 @@ import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.IndexEntry
 import com.audioeq.audio.MusicAppTracker
 import com.audioeq.data.EqRepository
+import com.audioeq.data.GitHubUpdateChecker
+import com.audioeq.data.GitHubUpdateState
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqBand
 import com.audioeq.model.EqConstants
@@ -110,7 +112,9 @@ data class EqUiState(
     val showRootWarningDialog: Boolean = false,
     val showCalibrationSheet: Boolean = false,
     val showSettingsSheet: Boolean = false,
-    val statusBannerMessage: String? = null
+    val statusBannerMessage: String? = null,
+    val githubRepo: String = "",
+    val githubUpdateState: GitHubUpdateState = GitHubUpdateState.Idle
 )
 
 class EqViewModel(application: Application) : AndroidViewModel(application) {
@@ -172,6 +176,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val _showSettingsSheet = MutableStateFlow(false)
 
     private val _statusBanner = MutableStateFlow<String?>(null)
+    private val _githubUpdateState = MutableStateFlow<GitHubUpdateState>(GitHubUpdateState.Idle)
     private val _isEqEnabled = MutableStateFlow(true)
     private val _isAbCompare = MutableStateFlow(false)
     private val _editingRightChannel = MutableStateFlow(false)
@@ -343,9 +348,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val flow5B = combine(
         _showCalibrationSheet,
         _showSettingsSheet,
-        _statusBanner
-    ) { calS, setS, banner ->
-        Intermediate5B(calS, setS, banner)
+        _statusBanner,
+        repository.githubRepo,
+        _githubUpdateState
+    ) { calS, setS, banner, ghRepo, ghUpdate ->
+        Intermediate5B(calS, setS, banner, ghRepo, ghUpdate)
     }
 
     private val flowP5 = combine(flow5A, flow5B) { a, b ->
@@ -355,7 +362,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             showRootWarningDialog = a.showRootWarningDialog,
             showCalibrationSheet = b.showCalibrationSheet,
             showSettingsSheet = b.showSettingsSheet,
-            statusBannerMessage = b.statusBannerMessage
+            statusBannerMessage = b.statusBannerMessage,
+            githubRepo = b.githubRepo,
+            githubUpdateState = b.githubUpdateState
         )
     }
 
@@ -505,7 +514,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             showRootWarningDialog = p5.showRootWarningDialog,
             showCalibrationSheet = p5.showCalibrationSheet,
             showSettingsSheet = p5.showSettingsSheet,
-            statusBannerMessage = p5.statusBannerMessage
+            statusBannerMessage = p5.statusBannerMessage,
+            githubRepo = p5.githubRepo,
+            githubUpdateState = p5.githubUpdateState
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, EqUiState())
 
@@ -531,7 +542,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             shizukuManager.refreshStatus()
             if (repository.engineMode.value == EngineMode.ROOT) {
-                val rootOk = shizukuManager.verifyRootAccess()
+                val rootOk = shizukuManager.verifyRootAccess(timeoutMs = 3000L)
                 if (!rootOk) {
                     val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
                         EngineMode.ADB_SHIZUKU
@@ -544,6 +555,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 repository.engineMode.value != EngineMode.ADB_SHIZUKU
             ) {
                 if (shizukuManager.isShizukuRunningAsRoot()) {
+                    shizukuManager.verifyRootAccess(timeoutMs = 2000L)
                     repository.setEngineMode(EngineMode.ROOT)
                 } else {
                     repository.setEngineMode(EngineMode.ADB_SHIZUKU)
@@ -554,12 +566,15 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             var previousShizukuState = shizukuManager.state.value
+            if (previousShizukuState == ShizukuState.READY && shizukuManager.isShizukuRunningAsRoot()) {
+                shizukuManager.ensureBoundAndGrantPermissions()
+            }
             shizukuManager.state.collect { newState ->
                 if (newState == ShizukuState.READY && previousShizukuState != ShizukuState.READY) {
                     val wantRoot = pendingDesiredMode == EngineMode.ROOT ||
                         repository.engineMode.value == EngineMode.ROOT ||
                         shizukuManager.isShizukuRunningAsRoot()
-                    if (wantRoot && shizukuManager.verifyRootAccess()) {
+                    if (wantRoot && shizukuManager.verifyRootAccess(timeoutMs = 5000L)) {
                         pendingDesiredMode = null
                         repository.setEngineMode(EngineMode.ROOT)
                         shizukuManager.ensureBoundAndGrantPermissions()
@@ -1285,20 +1300,18 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _statusBanner.value = "Applying Root (su) permission…"
         viewModelScope.launch(Dispatchers.IO) {
             shizukuManager.refreshStatus()
-            if (shizukuManager.state.value == ShizukuState.NEEDS_PERMISSION ||
-                shizukuManager.state.value == ShizukuState.DENIED_PERMANENTLY
-            ) {
-                shizukuManager.requestPermission()
-            }
-            val rootGranted = shizukuManager.verifyRootAccess()
+            val rootGranted = shizukuManager.verifyRootAccess(timeoutMs = 10_000L)
             if (rootGranted) {
                 pendingDesiredMode = null
                 repository.setEngineMode(EngineMode.ROOT)
                 shizukuManager.ensureBoundAndGrantPermissions()
                 engineController.triggerImmediateSessionSync()
                 _statusBanner.value = "Root (${shizukuManager.privilege()}) applied — Root engine active"
-            } else if (shizukuManager.state.value == ShizukuState.NEEDS_PERMISSION) {
+            } else if (shizukuManager.state.value == ShizukuState.NEEDS_PERMISSION ||
+                shizukuManager.state.value == ShizukuState.DENIED_PERMANENTLY
+            ) {
                 repository.setEngineMode(EngineMode.ROOT)
+                shizukuManager.requestPermission()
                 _statusBanner.value = "Waiting for Shizuku / Root (su) permission prompt…"
             } else {
                 val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
@@ -1310,6 +1323,20 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 engineController.triggerImmediateSessionSync()
                 _statusBanner.value = "Root (su) permission not granted — using ${fallback.shortTitle} (${shizukuManager.privilege()})"
             }
+        }
+    }
+
+    fun onAppResumed() {
+        viewModelScope.launch(Dispatchers.IO) {
+            MusicAppTracker.isNotificationListenerEnabled(getApplication())
+            shizukuManager.refreshStatus()
+            if (repository.engineMode.value == EngineMode.ROOT && !shizukuManager.isRootAvailable()) {
+                shizukuManager.verifyRootAccess(timeoutMs = 3000L)
+            }
+            if (shizukuManager.state.value == ShizukuState.READY) {
+                shizukuManager.ensureBoundAndGrantPermissions()
+            }
+            engineController.triggerImmediateSessionSync()
         }
     }
 
@@ -1425,6 +1452,33 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSeedHex(hex: String, fromWallpaper: Boolean = false) {
         repository.setSeedHex(hex, fromWallpaper)
+    }
+
+    fun setGithubRepo(repoInput: String) {
+        repository.setGithubRepo(repoInput)
+        if (_githubUpdateState.value is GitHubUpdateState.RepoNotConfigured) {
+            _githubUpdateState.value = GitHubUpdateState.Idle
+        }
+    }
+
+    fun checkForGithubUpdates(repoOverride: String? = null) {
+        val candidate = (repoOverride ?: repository.githubRepo.value).trim()
+        val normalized = GitHubUpdateChecker.normalizeRepoSlug(candidate)
+        if (normalized == null) {
+            _githubUpdateState.value = GitHubUpdateState.RepoNotConfigured
+            return
+        }
+        if (normalized != repository.githubRepo.value) {
+            repository.setGithubRepo(normalized)
+        }
+        _githubUpdateState.value = GitHubUpdateState.Checking
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = GitHubUpdateChecker.checkLatestRelease(
+                repoSlug = normalized,
+                currentVersion = com.audioeq.BuildConfig.VERSION_NAME
+            )
+            _githubUpdateState.value = result
+        }
     }
 
     fun openSavePresetDialog() {
@@ -1598,7 +1652,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private data class Intermediate5B(
         val showCalibrationSheet: Boolean,
         val showSettingsSheet: Boolean,
-        val statusBannerMessage: String?
+        val statusBannerMessage: String?,
+        val githubRepo: String,
+        val githubUpdateState: GitHubUpdateState
     )
 
     private data class PartialUiState1(
@@ -1659,6 +1715,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val showRootWarningDialog: Boolean,
         val showCalibrationSheet: Boolean,
         val showSettingsSheet: Boolean,
-        val statusBannerMessage: String?
+        val statusBannerMessage: String?,
+        val githubRepo: String,
+        val githubUpdateState: GitHubUpdateState
     )
 }

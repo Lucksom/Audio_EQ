@@ -80,6 +80,7 @@ fun TopBarHeader(
     shizukuState: ShizukuState = ShizukuState.NOT_RUNNING,
     shizukuPrivilege: String = "",
     rootAvailable: Boolean = false,
+    dumpPermissionGranted: Boolean = false,
     onToggleMaster: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -102,25 +103,31 @@ fun TopBarHeader(
         label = "masterCorner"
     )
 
+    val isShizukuRoot = shizukuState == ShizukuState.READY &&
+        (shizukuPrivilege.contains("uid=0") || shizukuPrivilege.contains("Root", ignoreCase = true))
+    val isShizukuShell = shizukuState == ShizukuState.READY && !isShizukuRoot
+
     val modeStatusLabel = when (selectedMode) {
         EngineMode.ROOT -> when {
-            rootAvailable && shizukuPrivilege.contains("Shizuku", ignoreCase = true) -> "Shizuku (Su)"
+            isShizukuRoot -> "Shizuku (Su)"
             rootAvailable -> "Root (Su)"
-            shizukuState == ShizukuState.NEEDS_PERMISSION -> "Root (Grant)"
+            isShizukuShell -> "Shizuku (Shell)"
+            dumpPermissionGranted -> "ADB (Shell)"
             else -> "Root"
         }
         EngineMode.ADB_SHIZUKU -> when {
-            shizukuState == ShizukuState.READY && shizukuPrivilege.contains("uid=0") -> "Shizuku (Su)"
-            shizukuState == ShizukuState.READY -> "Shizuku (Shell)"
-            shizukuState == ShizukuState.NEEDS_PERMISSION || shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Shizuku (Grant)"
+            isShizukuRoot -> "Shizuku (Su)"
+            isShizukuShell -> "Shizuku (Shell)"
+            rootAvailable -> "Root (Su)"
+            dumpPermissionGranted -> "ADB (Shell)"
             else -> "ADB / Shizuku"
         }
         EngineMode.LEGACY -> "Legacy"
     }
 
     val isModePrivilegeReady = when (selectedMode) {
-        EngineMode.ROOT -> rootAvailable
-        EngineMode.ADB_SHIZUKU -> shizukuState == ShizukuState.READY
+        EngineMode.ROOT -> rootAvailable || isShizukuRoot
+        EngineMode.ADB_SHIZUKU -> shizukuState == ShizukuState.READY || dumpPermissionGranted || rootAvailable
         EngineMode.LEGACY -> true
     }
 

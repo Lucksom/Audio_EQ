@@ -70,7 +70,7 @@ object ShizukuManager {
         false
     }
 
-    fun verifyRootAccess(): Boolean {
+    fun verifyRootAccess(timeoutMs: Long = 10_000L): Boolean {
         refresh()
         if (isShizukuRunningAsRoot()) {
             rootAccessVerified = true
@@ -79,19 +79,7 @@ object ShizukuManager {
             return true
         }
 
-        val suDirect = try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-            val finished = process.waitFor(2000, TimeUnit.MILLISECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                false
-            } else {
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                process.exitValue() == 0 && output.contains("uid=0")
-            }
-        } catch (_: Throwable) {
-            false
-        }
+        val suDirect = runSuIdCheck(timeoutMs)
 
         if (suDirect) {
             rootAccessVerified = true
@@ -122,6 +110,27 @@ object ShizukuManager {
         return shizukuSu
     }
 
+    private fun runSuIdCheck(timeoutMs: Long): Boolean {
+        val candidates = listOf("su", "/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su")
+        for (bin in candidates) {
+            val ok = try {
+                val process = Runtime.getRuntime().exec(arrayOf(bin, "-c", "id"))
+                val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+                if (!finished) {
+                    process.destroyForcibly()
+                    false
+                } else {
+                    val output = process.inputStream.bufferedReader().use { it.readText() }
+                    process.exitValue() == 0 && output.contains("uid=0")
+                }
+            } catch (_: Throwable) {
+                false
+            }
+            if (ok) return true
+        }
+        return false
+    }
+
     fun clearRootVerification() {
         rootAccessVerified = false
         _privilegeSummary.value = privilege()
@@ -130,7 +139,7 @@ object ShizukuManager {
     private fun execSuCommand(command: String): String? {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-            val finished = process.waitFor(2000, TimeUnit.MILLISECONDS)
+            val finished = process.waitFor(2500, TimeUnit.MILLISECONDS)
             if (finished && process.exitValue() == 0) {
                 process.inputStream.bufferedReader().use { it.readText() }.takeIf { it.isNotBlank() }
             } else {
@@ -275,6 +284,7 @@ object ShizukuManager {
 
     fun refresh() {
         val prevState = _state.value
+        val prevPriv = _privilegeSummary.value
         val newState = try {
             when {
                 !Shizuku.pingBinder() ->
@@ -289,15 +299,16 @@ object ShizukuManager {
         if (newState == ShizukuState.READY && isShizukuRunningAsRoot()) {
             rootAccessVerified = true
         }
+        val newPriv = privilege()
         _state.value = newState
-        _privilegeSummary.value = privilege()
+        _privilegeSummary.value = newPriv
         if (newState == ShizukuState.READY) {
             if (service == null) bind()
             if (!dumpGrantAttempted) {
                 tryGrantDumpPermissionAsync()
             }
         }
-        if (prevState != newState) {
+        if (prevState != newState || prevPriv != newPriv) {
             onStateChangedListener?.invoke(newState)
         }
     }

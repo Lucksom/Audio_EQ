@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,20 +35,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -90,10 +96,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import com.audioeq.BuildConfig
 import com.audioeq.audio.AutoEq
 import com.audioeq.audio.DeviceDiagnostics
 import com.audioeq.audio.Dsp
 import com.audioeq.audio.IndexEntry
+import com.audioeq.data.GitHubUpdateState
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.HeadphoneProfile
@@ -1193,6 +1201,8 @@ fun SettingsAndDiagnosticsSheet(
     transientMode: Boolean,
     themeMode: String,
     seedHex: String,
+    githubRepo: String = "",
+    githubUpdateState: GitHubUpdateState = GitHubUpdateState.Idle,
     musicOnlyTrackingEnabled: Boolean = true,
     selectedMusicPackages: Set<String> = emptySet(),
     onSelectMode: (EngineMode) -> Unit,
@@ -1208,6 +1218,8 @@ fun SettingsAndDiagnosticsSheet(
     onOpenNotificationAccess: () -> Unit = {},
     onSelectThemeMode: (String) -> Unit,
     onSelectSeedHex: (String, Boolean) -> Unit,
+    onSetGithubRepo: (String) -> Unit = {},
+    onCheckGithubUpdates: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -2079,6 +2091,245 @@ fun SettingsAndDiagnosticsSheet(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+            }
+
+            SettingsGroupCard(title = "APP UPDATES (GITHUB)") {
+                var editingRepo by remember(githubRepo) { mutableStateOf(githubRepo.isBlank()) }
+                var repoDraft by remember(githubRepo) { mutableStateOf(githubRepo) }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "Installed Version",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = palette.onSurface
+                        )
+                        Text(
+                            text = "v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 12.sp,
+                            color = palette.primary,
+                            modifier = Modifier.testTag("installed_version_text")
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = {
+                            if (editingRepo && repoDraft.isNotBlank()) {
+                                onSetGithubRepo(repoDraft)
+                                editingRepo = false
+                            }
+                            onCheckGithubUpdates()
+                        },
+                        enabled = githubUpdateState !is GitHubUpdateState.Checking,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("check_github_updates_button")
+                    ) {
+                        if (githubUpdateState is GitHubUpdateState.Checking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Checking…")
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.SystemUpdate,
+                                contentDescription = "Check for updates from GitHub",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Check updates")
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (githubRepo.isNotBlank()) "Repo: $githubRepo" else "GitHub repo not configured",
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontSize = 11.sp,
+                        color = palette.onVar,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                    )
+                    TextButton(
+                        onClick = { editingRepo = !editingRepo },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("edit_github_repo_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit GitHub repository",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (editingRepo) "Hide" else "Configure")
+                    }
+                }
+
+                AnimatedVisibility(visible = editingRepo || githubUpdateState is GitHubUpdateState.RepoNotConfigured) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = repoDraft,
+                            onValueChange = { repoDraft = it },
+                            label = { Text("GitHub Repository (owner/repo)") },
+                            placeholder = { Text("username/AudioEQ") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("github_repo_input")
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(
+                                onClick = {
+                                    onSetGithubRepo(repoDraft)
+                                    editingRepo = false
+                                    onCheckGithubUpdates()
+                                },
+                                enabled = repoDraft.isNotBlank(),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("save_check_github_repo_button")
+                            ) {
+                                Text("Save & Check")
+                            }
+                        }
+                    }
+                }
+
+                when (val upd = githubUpdateState) {
+                    is GitHubUpdateState.UpdateAvailable -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(palette.primaryC)
+                                .border(1.dp, palette.primary.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                .padding(12.dp)
+                                .testTag("update_available_card"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Update available: ${upd.latestRelease.tagName}",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                color = palette.onPrimaryC
+                            )
+                            Text(
+                                text = upd.latestRelease.changelog,
+                                fontSize = 12.sp,
+                                color = palette.onPrimaryC.copy(alpha = 0.9f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 180.dp)
+                                    .verticalScroll(rememberScrollState())
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val targetUrl = upd.latestRelease.apkDownloadUrl ?: upd.latestRelease.htmlUrl
+                                if (targetUrl.isNotBlank()) {
+                                    Button(
+                                        onClick = {
+                                            runCatching {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl))
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(intent)
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 48.dp)
+                                            .testTag("download_update_apk_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Download,
+                                            contentDescription = "Download update APK",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(if (upd.latestRelease.apkDownloadUrl != null) "Download APK" else "Open Release")
+                                    }
+                                }
+                                if (upd.latestRelease.apkDownloadUrl != null && upd.latestRelease.htmlUrl.isNotBlank()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            runCatching {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(upd.latestRelease.htmlUrl))
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(intent)
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("open_release_page_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                            contentDescription = "View GitHub release",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    is GitHubUpdateState.UpToDate -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(palette.sHigh)
+                                .border(1.dp, palette.outlineV, RoundedCornerShape(14.dp))
+                                .padding(12.dp)
+                                .testTag("update_uptodate_card"),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "You're up to date (${upd.latestRelease.tagName})",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = palette.primary
+                            )
+                            Text(
+                                text = upd.latestRelease.changelog,
+                                fontSize = 12.sp,
+                                color = palette.onVar,
+                                maxLines = 8,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    is GitHubUpdateState.Error -> {
+                        Text(
+                            text = upd.message,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("update_error_text")
+                        )
+                    }
+
+                    else -> Unit
                 }
             }
 

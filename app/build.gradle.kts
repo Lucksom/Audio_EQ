@@ -16,8 +16,20 @@ android {
     applicationId = "com.audioeq.kxmptq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val resolvedVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull()
+      ?: System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+      ?: System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+      ?: 2
+    val resolvedVersionName = (project.findProperty("versionName") as String?)?.takeIf { it.isNotBlank() }
+      ?: System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }
+      ?: "1.0.$resolvedVersionCode"
+    val resolvedGithubRepo = ((project.findProperty("githubRepo") as String?)
+      ?: System.getenv("GITHUB_REPOSITORY")
+      ?: "").trim().replace("\"", "")
+
+    versionCode = resolvedVersionCode
+    versionName = resolvedVersionName
+    buildConfigField("String", "GITHUB_REPO", "\"$resolvedGithubRepo\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

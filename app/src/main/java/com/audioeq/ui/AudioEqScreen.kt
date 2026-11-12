@@ -121,6 +121,7 @@ fun AudioEqScreen(
                         shizukuState = uiState.shizukuState,
                         shizukuPrivilege = uiState.shizukuPrivilege,
                         rootAvailable = uiState.diagnostics.rootAvailable,
+                        dumpPermissionGranted = uiState.diagnostics.dumpPermissionGranted,
                         onToggleMaster = viewModel::setMasterEnabled,
                         onOpenSettings = { viewModel.setShowSettingsSheet(true) }
                     )
@@ -312,6 +313,8 @@ fun AudioEqScreen(
             transientMode = uiState.transientMode,
             themeMode = uiState.themeMode,
             seedHex = uiState.seedHex,
+            githubRepo = uiState.githubRepo,
+            githubUpdateState = uiState.githubUpdateState,
             musicOnlyTrackingEnabled = uiState.musicOnlyTrackingEnabled,
             selectedMusicPackages = uiState.selectedMusicPackages,
             onSelectMode = viewModel::selectMode,
@@ -327,6 +330,8 @@ fun AudioEqScreen(
             onOpenNotificationAccess = viewModel::openNotificationAccessSettings,
             onSelectThemeMode = viewModel::setThemeMode,
             onSelectSeedHex = viewModel::setSeedHex,
+            onSetGithubRepo = viewModel::setGithubRepo,
+            onCheckGithubUpdates = { viewModel.checkForGithubUpdates() },
             onDismiss = { viewModel.setShowSettingsSheet(false) }
         )
     }
