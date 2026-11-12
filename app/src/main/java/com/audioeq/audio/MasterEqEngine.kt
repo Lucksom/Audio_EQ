@@ -770,6 +770,11 @@ class MasterEqEngine(
         val bal = params.balanceDb.coerceIn(-6.0, 6.0)
         val trimL = if (bal > 0.0) -bal else 0.0
         val trimR = if (bal < 0.0) bal else 0.0
+        val hasActiveAutoEq = effectiveHpProfile != null &&
+            effectiveHpProfile.id != "none" &&
+            (effectiveHpProfile.peqFilters.isNotEmpty() ||
+                effectiveHpProfile.graphicPoints.isNotEmpty() ||
+                effectiveHpProfile.correction31Db.any { abs(it) > 0.01f })
         val autoEqSafePreamp = if (
             effectiveHpProfile != null &&
             effectiveHpProfile.id != "none" &&
@@ -780,7 +785,29 @@ class MasterEqEngine(
         } else {
             0.0
         }
-        val basePreamp = kotlin.math.min(params.preampDb.coerceIn(-12.0, 6.0), autoEqSafePreamp)
+        val avgPinkGain = 0.5 * (Dsp.pinkGainDb(targetL31) + Dsp.pinkGainDb(targetR31))
+        val isFixedBandAutoEq = effectiveHpProfile != null && effectiveHpProfile.id.startsWith("autoeq_fb_")
+        val isAutoPopulatedPreamp = (hasActiveAutoEq && abs(params.preampDb - autoEqSafePreamp) < 0.35) ||
+            (isFixedBandAutoEq && params.preampDb < -0.5)
+        val basePreamp = if (params.limiterEnabled) {
+            val manualPreamp = if (isAutoPopulatedPreamp) 0.0 else params.preampDb.coerceIn(-12.0, 6.0)
+            val loudnessMakeup = if (params.autoGainEnabled) {
+                (-avgPinkGain).coerceIn(-6.0, 6.0)
+            } else if (avgPinkGain < -0.1) {
+                (-avgPinkGain).coerceIn(0.0, 4.5)
+            } else {
+                0.0
+            }
+            (manualPreamp + loudnessMakeup).coerceIn(-12.0, 6.0)
+        } else {
+            val nonLimPreamp = kotlin.math.min(params.preampDb.coerceIn(-12.0, 6.0), autoEqSafePreamp)
+            val loudnessMakeup = if (params.autoGainEnabled && avgPinkGain < -0.1) {
+                (-avgPinkGain).coerceIn(0.0, 3.0)
+            } else {
+                0.0
+            }
+            (nonLimPreamp + loudnessMakeup).coerceIn(-12.0, 6.0)
+        }
         val volmaxMakeup = if (cfg.profile != AudioProfile.OFF) endpointSpec.volmaxMakeupDb.toDouble() else 0.0
 
         val is10BandMode = params.compatibility10Band
@@ -811,10 +838,6 @@ class MasterEqEngine(
 
         val leftInputGain = if (effectiveEnabled) (basePreamp + trimL + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
         val rightInputGain = if (effectiveEnabled) (basePreamp + trimR + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
-        val makeupPostGain = if (
-            effectiveEnabled &&
-            (cfg.bassEnabled || cfg.dialogueEnhancerEnabled || cfg.deepBassEnabled)
-        ) 0.35f else 0.0f
 
         val hasDialogueMbc = cfg.dialogueEnhancerEnabled
         val deFactor = if (cfg.dialogueEnhancerEnabled) {
@@ -822,19 +845,21 @@ class MasterEqEngine(
         } else 0f
 
         val hasSpecificMusicSessions = dpSessions.keys.any { it > 0 } || eqSessions.keys.any { it > 0 }
+        val useGlobalSessionOnly = !params.musicOnlyTracking && dpSessions.containsKey(0)
 
         val effectiveLimiterCeilingDb = if (isSpeakerRoute) {
-            minOf(params.limiterCeilingDb.toFloat(), endpointSpec.peakCeilingDb).coerceIn(-3.0f, -0.5f)
+            minOf(params.limiterCeilingDb.toFloat(), -0.5f).coerceIn(-3.0f, -0.3f)
         } else {
-            params.limiterCeilingDb.toFloat().coerceIn(-3.0f, 0.0f)
+            params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f)
         }
 
         for ((sid, dp) in dpSessions) {
             try {
-                val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
-                    false
-                } else {
-                    effectiveEnabled
+                val sessionEnabled = when {
+                    !effectiveEnabled -> false
+                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
+                    useGlobalSessionOnly && sid > 0 -> false
+                    else -> true
                 }
                 if (dp.enabled != sessionEnabled) {
                     dp.enabled = sessionEnabled
@@ -901,9 +926,9 @@ class MasterEqEngine(
                     true,
                     params.limiterEnabled && sessionEnabled,
                     0,
-                    4.0f,
-                    80.0f,
-                    2.0f,
+                    Dsp.LIM_ATTACK_MS,
+                    Dsp.LIM_RELEASE_MS,
+                    Dsp.LIM_RATIO,
                     effectiveLimiterCeilingDb,
                     0.0f
                 )
@@ -919,10 +944,11 @@ class MasterEqEngine(
 
         for ((sid, virt) in virtualizerSessions) {
             try {
-                val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
-                    false
-                } else {
-                    effectiveEnabled
+                val sessionEnabled = when {
+                    !effectiveEnabled -> false
+                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
+                    useGlobalSessionOnly && sid > 0 -> false
+                    else -> true
                 }
                 val wantVirt = sessionEnabled && virtStrength > 0
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && wantVirt) {
@@ -1015,18 +1041,26 @@ class MasterEqEngine(
             )
             for ((sid, hwFx) in hardwareEffectSessions) {
                 try {
-                    val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
+                    val dpHandlesSession = dpSessions.containsKey(sid)
+                    val sessionEnabled = if (dpHandlesSession) {
                         false
                     } else {
-                        effectiveEnabled
+                        when {
+                            !effectiveEnabled -> false
+                            params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
+                            useGlobalSessionOnly && sid > 0 -> false
+                            else -> true
+                        }
                     }
                     hwFx.enabled = sessionEnabled
-                    val setParamMethod = AudioEffect::class.java.getMethod(
-                        "setParameter",
-                        Int::class.javaPrimitiveType,
-                        ByteArray::class.java
-                    )
-                    setParamMethod.invoke(hwFx, EFFECT_PARAM_CP_VALUES, payload)
+                    if (sessionEnabled) {
+                        val setParamMethod = AudioEffect::class.java.getMethod(
+                            "setParameter",
+                            Int::class.javaPrimitiveType,
+                            ByteArray::class.java
+                        )
+                        setParamMethod.invoke(hwFx, EFFECT_PARAM_CP_VALUES, payload)
+                    }
                 } catch (_: Throwable) {
                 }
             }
@@ -1034,10 +1068,11 @@ class MasterEqEngine(
 
         for ((sid, eq) in eqSessions) {
             try {
-                val sessionEnabled = if (params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions) {
-                    false
-                } else {
-                    effectiveEnabled
+                val sessionEnabled = when {
+                    !effectiveEnabled -> false
+                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
+                    useGlobalSessionOnly && sid > 0 -> false
+                    else -> true
                 }
                 eq.enabled = sessionEnabled
                 val nBands = eq.numberOfBands.toInt()
@@ -1061,7 +1096,11 @@ class MasterEqEngine(
 
                 loudnessSessions[sid]?.let { le ->
                     le.enabled = sessionEnabled
-                    val targetGainMb = if (sessionEnabled) (makeupPostGain * 150f).roundToInt() else 0
+                    val targetGainMb = if (sessionEnabled) {
+                        val compMb = if (avgPinkGain < -0.1) ((-avgPinkGain).coerceIn(0.0, 4.5) * 100.0).roundToInt() else 0
+                        val enhMb = if (cfg.bassEnabled || cfg.dialogueEnhancerEnabled || cfg.deepBassEnabled) 50 else 0
+                        maxOf(compMb, enhMb)
+                    } else 0
                     le.setTargetGain(targetGainMb)
                 }
             } catch (_: Throwable) {

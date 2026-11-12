@@ -4,99 +4,19 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- Recessed Equalizer Channel Tracks (Soft modern light-mode slots) -->
     <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M 33,36 C 31.3,36 30,37.3 30,39 L 30,69 C 30,70.7 31.3,72 33,72 C 34.7,72 36,70.7 36,69 L 36,39 C 36,37.3 34.7,36 33,36 Z" />
+        android:fillColor="#4F46E5"
+        android:pathData="M22.875,45.0 A4.125,4.125 0 0,1 31.125,45.0 L31.125,63.0 A4.125,4.125 0 0,1 22.875,63.0 Z" />
     <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M 43,28 C 41.3,28 40,29.3 40,31 L 40,77 C 40,78.7 41.3,80 43,80 C 44.7,80 46,78.7 46,77 L 46,31 C 46,29.3 44.7,28 43,28 Z" />
+        android:fillColor="#4F46E5"
+        android:pathData="M36.375,35.625 A4.125,4.125 0 0,1 44.625,35.625 L44.625,72.375 A4.125,4.125 0 0,1 36.375,72.375 Z" />
     <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M 54,22 C 52.3,22 51,23.3 51,25 L 51,83 C 51,84.7 52.3,86 54,86 C 55.7,86 57,84.7 57,83 L 57,25 C 57,23.3 55.7,22 54,22 Z" />
+        android:fillColor="#4F46E5"
+        android:pathData="M49.875,28.125 A4.125,4.125 0 0,1 58.125,28.125 L58.125,79.875 A4.125,4.125 0 0,1 49.875,79.875 Z" />
     <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M 65,28 C 63.3,28 62,29.3 62,31 L 62,77 C 62,78.7 63.3,80 65,80 C 66.7,80 68,78.7 68,77 L 68,31 C 68,29.3 66.7,28 65,28 Z" />
+        android:fillColor="#4F46E5"
+        android:pathData="M63.375,39.375 A4.125,4.125 0 0,1 71.625,39.375 L71.625,68.625 A4.125,4.125 0 0,1 63.375,68.625 Z" />
     <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M 75,36 C 73.3,36 72,37.3 72,39 L 72,69 C 72,70.7 73.3,72 75,72 C 76.7,72 78,70.7 78,69 L 78,39 C 78,37.3 76.7,36 75,36 Z" />
-
-    <!-- Vibrant Active Equalizer Frequency Level Columns -->
-    <path
-        android:fillColor="#0EA5E9"
-        android:pathData="M 33,50 C 31.3,50 30,51.3 30,53 L 30,69 C 30,70.7 31.3,72 33,72 C 34.7,72 36,70.7 36,69 L 36,53 C 36,51.3 34.7,50 33,50 Z" />
-    <path
-        android:fillColor="#6366F1"
-        android:pathData="M 43,38 C 41.3,38 40,39.3 40,41 L 40,77 C 40,78.7 41.3,80 43,80 C 44.7,80 46,78.7 46,77 L 46,41 C 46,39.3 44.7,38 43,38 Z" />
-    <path
-        android:fillColor="#8B5CF6"
-        android:pathData="M 54,30 C 52.3,30 51,31.3 51,33 L 51,83 C 51,84.7 52.3,86 54,86 C 55.7,86 57,84.7 57,83 L 57,33 C 57,31.3 55.7,30 54,30 Z" />
-    <path
-        android:fillColor="#D946EF"
-        android:pathData="M 65,42 C 63.3,42 62,43.3 62,45 L 62,77 C 62,78.7 63.3,80 65,80 C 66.7,80 68,78.7 68,77 L 68,45 C 68,43.3 66.7,42 65,42 Z" />
-    <path
-        android:fillColor="#F43F5E"
-        android:pathData="M 75,48 C 73.3,48 72,49.3 72,51 L 72,69 C 72,70.7 73.3,72 75,72 C 76.7,72 78,70.7 78,69 L 78,51 C 78,49.3 76.7,48 75,48 Z" />
-
-    <!-- High-Contrast Sound Wave Crest Line -->
-    <path
-        android:strokeColor="#1E293B"
-        android:strokeWidth="2.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M 23,58 C 27,58 29,50 33,50 C 37,50 39,38 43,38 C 47,38 49,30 54,30 C 59,30 61,42 65,42 C 69,42 71,48 75,48 C 79,48 81,56 85,56" />
-
-    <!-- Illuminated Circular Equalizer Knobs -->
-    <!-- Knob 1 (33, 50) Sky Cyan ring -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 33,45.5 A 4.5,4.5 0 1,1 32.9,45.5 Z" />
-    <path
-        android:strokeColor="#0EA5E9"
-        android:strokeWidth="1.6"
-        android:fillColor="#00000000"
-        android:pathData="M 33,45.5 A 4.5,4.5 0 1,1 32.9,45.5 Z" />
-
-    <!-- Knob 2 (43, 38) Indigo ring -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 43,33.5 A 4.5,4.5 0 1,1 42.9,33.5 Z" />
-    <path
-        android:strokeColor="#6366F1"
-        android:strokeWidth="1.6"
-        android:fillColor="#00000000"
-        android:pathData="M 43,33.5 A 4.5,4.5 0 1,1 42.9,33.5 Z" />
-
-    <!-- Knob 3 (54, 30) Violet ring (Center peak) -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 54,25 A 5,5 0 1,1 53.9,25 Z" />
-    <path
-        android:strokeColor="#8B5CF6"
-        android:strokeWidth="1.8"
-        android:fillColor="#00000000"
-        android:pathData="M 54,25 A 5,5 0 1,1 53.9,25 Z" />
-
-    <!-- Knob 4 (65, 42) Fuchsia ring -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 65,37.5 A 4.5,4.5 0 1,1 64.9,37.5 Z" />
-    <path
-        android:strokeColor="#D946EF"
-        android:strokeWidth="1.6"
-        android:fillColor="#00000000"
-        android:pathData="M 65,37.5 A 4.5,4.5 0 1,1 64.9,37.5 Z" />
-
-    <!-- Knob 5 (75, 48) Rose ring -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 75,43.5 A 4.5,4.5 0 1,1 74.9,43.5 Z" />
-    <path
-        android:strokeColor="#F43F5E"
-        android:strokeWidth="1.6"
-        android:fillColor="#00000000"
-        android:pathData="M 75,43.5 A 4.5,4.5 0 1,1 74.9,43.5 Z" />
-
+        android:fillColor="#4F46E5"
+        android:pathData="M76.875,46.875 A4.125,4.125 0 0,1 85.125,46.875 L85.125,61.125 A4.125,4.125 0 0,1 76.875,61.125 Z" />
 </vector>
