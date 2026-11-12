@@ -107,15 +107,23 @@ class AudioEngineController(
     private var latestRenderParams = EngineRenderParams()
     @Volatile
     private var currentEngineMode: EngineMode = EngineMode.LEGACY
+    @Volatile
+    private var lastSyncedMode: EngineMode? = null
+    @Volatile
+    private var lastSyncedPrivilegeReady: Boolean? = null
+    @Volatile
+    private var forceNextSync: Boolean = true
 
     init {
         MusicAppTracker.isNotificationListenerEnabled(context)
         shizukuManager.setOnStateChangedListener {
+            forceNextSync = true
             scope.launch(Dispatchers.IO) {
                 syncPrivilegedStateAndSessions()
             }
         }
         MusicAppTracker.setOnMusicStateChangedListener {
+            forceNextSync = true
             scope.launch(Dispatchers.IO) {
                 syncPrivilegedStateAndSessions()
             }
@@ -126,6 +134,7 @@ class AudioEngineController(
     }
 
     fun triggerImmediateSessionSync() {
+        forceNextSync = true
         scope.launch(Dispatchers.IO) {
             syncPrivilegedStateAndSessions()
         }
@@ -146,6 +155,21 @@ class AudioEngineController(
         val mode = currentEngineMode
         val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
         val privilegeReady = isPrivilegeReadyForMode(mode)
+        val forced = forceNextSync
+        forceNextSync = false
+
+        if (!forced &&
+            mode == EngineMode.LEGACY &&
+            lastSyncedMode == EngineMode.LEGACY &&
+            lastSyncedPrivilegeReady == privilegeReady &&
+            masterEngine.isSession0Healthy()
+        ) {
+            refreshDiagnostics()
+            return
+        }
+
+        lastSyncedMode = mode
+        lastSyncedPrivilegeReady = privilegeReady
         masterEngine.setEngineMode(mode, privilegeReady)
         MusicAppTracker.setEngineTrackingContext(
             context = context,

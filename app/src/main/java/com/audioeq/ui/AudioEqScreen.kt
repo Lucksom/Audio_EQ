@@ -259,7 +259,7 @@ fun AudioEqScreen(
     if (uiState.showCalibrationSheet) {
         SoundCalibrationSheet(
             activeRoute = uiState.activeRoute,
-            isLegacyTier1 = uiState.engineMode == EngineMode.LEGACY,
+            isLegacyTier1 = uiState.operatingMode == com.audioeq.model.OperatingMode.LEGACY_TIER1_EQ,
             headphoneProfiles = uiState.headphoneProfiles,
             selectedHeadphoneProfileId = uiState.headphoneProfileId,
             headphoneStrength = uiState.headphoneStrength,

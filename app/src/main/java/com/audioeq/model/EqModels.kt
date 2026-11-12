@@ -93,8 +93,8 @@ enum class LegacyGlobalMixMode(
 ) {
     AUTO(
         id = "auto",
-        label = "Auto (Smart Global)",
-        subtitle = "Uses Native 5-Band FX on vendor/offload devices or 31-Band DP on standard AOSP global output (Session 0)"
+        label = "Auto (31-Band DP)",
+        subtitle = "Uses 31-Band DynamicsProcessing on Global Output (Session 0) with automatic Native 5-Band FX fallback if unavailable"
     ),
     OFFLOAD_EQ(
         id = "offload_eq",
@@ -103,8 +103,8 @@ enum class LegacyGlobalMixMode(
     ),
     DYNAMICS_PROCESSING(
         id = "dynamics_processing",
-        label = "31-Band DP",
-        subtitle = "Forces 31-Band DynamicsProcessing on Global Output (Session 0) with 5-Band FX fallback if unavailable"
+        label = "31-Band DP Only",
+        subtitle = "Prioritizes 31-Band DynamicsProcessing on Global Output (Session 0) with 5-Band FX fallback if unavailable"
     );
 
     companion object {

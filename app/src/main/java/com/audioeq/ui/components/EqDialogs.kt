@@ -1865,7 +1865,7 @@ fun SettingsAndDiagnosticsSheet(
             SettingsGroupCard(title = "ENGINE MODE ACCESSIBILITY & ASSIGNED PROCESSES") {
                 DiagnosticRow(
                     "Legacy Mode (Zero ADB/Root)",
-                    "Global Output Mix (Session 0) · Zero Session Tracking · Native 5-Band FX (EQ/BassBoost/Virtualizer/Loudness) or 31-Band DP"
+                    "Global Output Mix (Session 0) · Zero Session Tracking · 31-Band DP (with Native 5-Band FX fallback)"
                 )
                 DiagnosticRow(
                     "ADB / Shizuku Mode (UID 2000)",

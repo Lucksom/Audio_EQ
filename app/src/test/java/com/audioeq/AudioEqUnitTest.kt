@@ -386,14 +386,14 @@ class AudioEqUnitTest {
 
     @Test
     fun verifyLegacyMixEnginePreferenceForOffloadVsAosp() {
-        assertTrue(
+        org.junit.Assert.assertFalse(
             com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
                 legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.AUTO,
                 vendorOffloadDetected = true,
                 sdkInt = 34
             )
         )
-        assertFalse(
+        org.junit.Assert.assertFalse(
             com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
                 legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.AUTO,
                 vendorOffloadDetected = false,
@@ -407,7 +407,7 @@ class AudioEqUnitTest {
                 sdkInt = 34
             )
         )
-        assertFalse(
+        org.junit.Assert.assertFalse(
             com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
                 legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.DYNAMICS_PROCESSING,
                 vendorOffloadDetected = true,

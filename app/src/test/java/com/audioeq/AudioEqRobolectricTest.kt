@@ -279,6 +279,18 @@ class AudioEqRobolectricTest {
             val sids = engine.getActiveSessionIds()
             org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(404))
             org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(505))
+            assertTrue(
+                "Legacy mode should keep global Legacy operating mode",
+                engine.activeOperatingMode == com.audioeq.model.OperatingMode.LEGACY_TIER2_DP ||
+                    engine.activeOperatingMode == com.audioeq.model.OperatingMode.LEGACY_TIER1_EQ
+            )
+            assertTrue(
+                "Legacy Mix AUTO label should reflect 31-Band DP default",
+                com.audioeq.model.LegacyGlobalMixMode.AUTO.label.contains("31-Band DP")
+            )
+            // Verify healthy query does not throw
+            engine.isSession0Healthy()
+            assertTrue(engine.getLegacyEngineSummary().startsWith("Mix 0:"))
         } finally {
             engine.release()
         }
