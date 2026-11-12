@@ -263,7 +263,7 @@ class AudioEqRobolectricTest {
     }
 
     @Test
-    fun `verify MasterEqEngine in Legacy mode ignores session tracking and keeps global mode`() {
+    fun `verify MasterEqEngine in Legacy mode tracks sessions and keeps global mode`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val engine = com.audioeq.audio.MasterEqEngine(
             context = context,
@@ -277,8 +277,9 @@ class AudioEqRobolectricTest {
             Thread.sleep(150L)
 
             val sids = engine.getActiveSessionIds()
-            org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(404))
-            org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(505))
+            assertTrue("Legacy mode must attach to external sid 404", sids.contains(404))
+            assertTrue("Legacy mode must attach to discovered sid 505", sids.contains(505))
+            assertTrue("Legacy mode must retain global Mix 0", sids.contains(0))
             assertTrue(
                 "Legacy mode should keep global Legacy operating mode",
                 engine.activeOperatingMode == com.audioeq.model.OperatingMode.LEGACY_TIER2_DP ||

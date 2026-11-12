@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -21,6 +22,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -196,14 +198,121 @@ object MusicAppTracker {
     @Volatile
     private var legacyUniversalActive: Boolean = true
 
+    @Volatile
+    private var appReceiverRegistered: Boolean = false
+
+    private const val PREFS_BROADCAST_SESSIONS = "audio_eq_broadcast_sessions"
+    private const val KEY_BOOT_EPOCH_SEC = "boot_epoch_sec"
+    private const val KEY_SESSION_ENTRIES = "session_entries"
+
+    private val appSessionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            handleSessionBroadcastIntent(ctx, intent)
+        }
+    }
+
+    fun init(context: Context) {
+        val appCtx = context.applicationContext
+        lastAppContext = appCtx
+        restorePersistedBroadcastSessions(appCtx)
+        if (!appReceiverRegistered) {
+            synchronized(this) {
+                if (!appReceiverRegistered) {
+                    runCatching {
+                        val filter = IntentFilter().apply {
+                            addAction(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
+                            addAction(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+                        }
+                        ContextCompat.registerReceiver(
+                            appCtx,
+                            appSessionReceiver,
+                            filter,
+                            ContextCompat.RECEIVER_EXPORTED
+                        )
+                        appReceiverRegistered = true
+                    }
+                }
+            }
+        }
+    }
+
+    fun handleSessionBroadcastIntent(context: Context, intent: Intent?) {
+        if (intent == null) return
+        val sid = intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1)
+        if (sid <= 0) return
+        val pkg = intent.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME)
+        val contentType = intent.getIntExtra(
+            AudioEffect.EXTRA_CONTENT_TYPE,
+            AudioEffect.CONTENT_TYPE_MUSIC
+        )
+        when (intent.action) {
+            AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION -> {
+                onBroadcastSessionOpened(
+                    context = context.applicationContext,
+                    sessionId = sid,
+                    packageName = pkg,
+                    contentType = contentType
+                )
+            }
+            AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION -> {
+                onBroadcastSessionClosed(context.applicationContext, sid)
+            }
+        }
+    }
+
+    private fun currentBootEpochSec(): Long =
+        (System.currentTimeMillis() - SystemClock.elapsedRealtime()) / 1000L
+
+    private fun persistBroadcastSessions(context: Context) {
+        runCatching {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_BROADCAST_SESSIONS, Context.MODE_PRIVATE)
+            val entries = allBroadcastSessions.values
+                .take(16)
+                .map { "${it.sessionId}|${it.packageName}|${it.source}" }
+                .toSet()
+            prefs.edit()
+                .putLong(KEY_BOOT_EPOCH_SEC, currentBootEpochSec())
+                .putStringSet(KEY_SESSION_ENTRIES, entries)
+                .apply()
+        }
+    }
+
+    private fun restorePersistedBroadcastSessions(context: Context) {
+        runCatching {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_BROADCAST_SESSIONS, Context.MODE_PRIVATE)
+            val savedBoot = prefs.getLong(KEY_BOOT_EPOCH_SEC, -1L)
+            val curBoot = currentBootEpochSec()
+            if (savedBoot < 0L || kotlin.math.abs(curBoot - savedBoot) > 30L) {
+                prefs.edit().clear().apply()
+                return
+            }
+            val rawSet = prefs.getStringSet(KEY_SESSION_ENTRIES, emptySet()).orEmpty()
+            for (entry in rawSet) {
+                val parts = entry.split('|')
+                val sid = parts.getOrNull(0)?.toIntOrNull() ?: continue
+                if (sid <= 0) continue
+                val pkg = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "audio.session"
+                if (pkg == context.packageName || pkg.startsWith("com.audioeq")) continue
+                val src = parts.getOrNull(2)?.takeIf { it.isNotBlank() } ?: "AudioEffect"
+                val tracked = TrackedMusicSession(
+                    sessionId = sid,
+                    packageName = pkg,
+                    appLabel = resolveAppLabel(context, pkg),
+                    source = src
+                )
+                allBroadcastSessions.putIfAbsent(sid, tracked)
+                if (isMusicAppPackage(context, pkg, AudioEffect.CONTENT_TYPE_MUSIC)) {
+                    broadcastMusicSessions.putIfAbsent(sid, tracked)
+                }
+            }
+        }
+    }
+
     fun setEngineTrackingContext(context: Context, isLegacyMode: Boolean, hasPrivilegedControl: Boolean) {
         lastAppContext = context.applicationContext
         val changed = (legacyUniversalActive != isLegacyMode) || (privilegedModeActive != hasPrivilegedControl)
         legacyUniversalActive = isLegacyMode
         privilegedModeActive = hasPrivilegedControl
-        if (isLegacyMode) {
-            privilegedMusicSessions.clear()
-        }
         if (changed) {
             rebuildSummary(context)
         }
@@ -420,15 +529,22 @@ object MusicAppTracker {
             appLabel = label,
             source = "AudioEffect"
         )
-        allBroadcastSessions[sessionId] = tracked
+        val prev = allBroadcastSessions.put(sessionId, tracked)
+        persistBroadcastSessions(context)
 
         if (!isMusicAppPackage(context, cleanedPkg, contentType)) {
             broadcastMusicSessions.remove(sessionId)
             rebuildSummary(context)
+            if (prev != tracked) {
+                onMusicStateChanged?.invoke()
+            }
             return false
         }
         broadcastMusicSessions[sessionId] = tracked
         rebuildSummary(context)
+        if (prev != tracked) {
+            onMusicStateChanged?.invoke()
+        }
         return true
     }
 
@@ -437,22 +553,32 @@ object MusicAppTracker {
         val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: "external.player"
         if (pkg == context.packageName || pkg.startsWith("com.audioeq")) return
         playbackWentIdleSinceBroadcast = false
-        allBroadcastSessions.putIfAbsent(
-            sessionId,
-            TrackedMusicSession(
-                sessionId = sessionId,
-                packageName = pkg,
-                appLabel = resolveAppLabel(context, pkg),
-                source = "ControlPanel"
-            )
+        val tracked = TrackedMusicSession(
+            sessionId = sessionId,
+            packageName = pkg,
+            appLabel = resolveAppLabel(context, pkg),
+            source = "ControlPanel"
         )
+        val prev = allBroadcastSessions.put(sessionId, tracked)
+        if (isMusicAppPackage(context, pkg, AudioEffect.CONTENT_TYPE_MUSIC)) {
+            broadcastMusicSessions[sessionId] = tracked
+        }
+        persistBroadcastSessions(context)
+        rebuildSummary(context)
+        if (prev != tracked) {
+            onMusicStateChanged?.invoke()
+        }
     }
 
     fun onBroadcastSessionClosed(context: Context, sessionId: Int) {
-        allBroadcastSessions.remove(sessionId)
-        broadcastMusicSessions.remove(sessionId)
-        privilegedMusicSessions.remove(sessionId)
+        val removedA = allBroadcastSessions.remove(sessionId)
+        val removedB = broadcastMusicSessions.remove(sessionId)
+        val removedP = privilegedMusicSessions.remove(sessionId)
+        persistBroadcastSessions(context)
         rebuildSummary(context)
+        if (removedA != null || removedB != null || removedP != null) {
+            onMusicStateChanged?.invoke()
+        }
     }
 
     fun updatePrivilegedMusicSessions(context: Context, sessions: List<TrackedMusicSession>) {
@@ -471,6 +597,26 @@ object MusicAppTracker {
     fun getAllBroadcastSessionIds(): Set<Int> = LinkedHashSet(allBroadcastSessions.keys)
 
     fun getBroadcastSessionIds(): Set<Int> = LinkedHashSet(broadcastMusicSessions.keys)
+
+    fun getLegacyTargetSessionIds(musicOnly: Boolean = false): Set<Int> {
+        val result = LinkedHashSet<Int>()
+        for ((sid, session) in broadcastMusicSessions) {
+            if (!musicOnly || isPackageCurrentlyAllowed(session.packageName)) {
+                result.add(sid)
+            }
+        }
+        for ((sid, session) in allBroadcastSessions) {
+            if (!musicOnly || isPackageCurrentlyAllowed(session.packageName)) {
+                result.add(sid)
+            }
+        }
+        for ((sid, session) in privilegedMusicSessions) {
+            if (!musicOnly || isPackageCurrentlyAllowed(session.packageName)) {
+                result.add(sid)
+            }
+        }
+        return result
+    }
 
     fun hasActiveNonSessionMediaPlayback(): Boolean {
         val sessions = if (legacyUniversalActive) allBroadcastSessions else broadcastMusicSessions
@@ -992,6 +1138,7 @@ class EqualizerActionReceiver : BroadcastReceiver() {
             runCatching {
                 val repo = com.audioeq.data.EqRepository(context.applicationContext)
                 repo.setMasterEnabled(false)
+                AudioEngineController.disableActiveInstanceFromNotification()
                 EqualizerNotificationHelper.updateOrCancelPersistentNotification(
                     context = context.applicationContext,
                     masterEnabled = false,
@@ -1003,5 +1150,13 @@ class EqualizerActionReceiver : BroadcastReceiver() {
                 )
             }
         }
+    }
+}
+
+class AudioSessionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (context == null || intent == null) return
+        MusicAppTracker.init(context)
+        MusicAppTracker.handleSessionBroadcastIntent(context, intent)
     }
 }

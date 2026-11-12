@@ -16,6 +16,8 @@ import com.audioeq.shizuku.ShizukuState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,9 +66,24 @@ data class DeviceDiagnostics(
 class AudioEngineController(
     private val context: Context,
     private val shizukuManager: ShizukuManager,
+    @Suppress("UNUSED_PARAMETER")
     private val scope: CoroutineScope,
     private val onRouteChanged: (OutputRoute, String, String?) -> Unit
 ) {
+
+    companion object {
+        @Volatile
+        private var activeInstance: AudioEngineController? = null
+
+        fun disableActiveInstanceFromNotification() {
+            val inst = activeInstance ?: return
+            inst.latestRenderParams = inst.latestRenderParams.copy(masterEnabled = false)
+            inst.masterEngine.updateParams(inst.latestRenderParams)
+            inst.refreshDiagnostics()
+        }
+    }
+
+    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var currentRoute: OutputRoute = OutputRoute.SPEAKER
     private var currentDeviceKey: String = "speaker:builtin"
@@ -115,16 +132,22 @@ class AudioEngineController(
     private var forceNextSync: Boolean = true
 
     init {
+        val prev = activeInstance
+        if (prev != null && prev !== this) {
+            prev.release()
+        }
+        activeInstance = this
+        MusicAppTracker.init(context)
         MusicAppTracker.isNotificationListenerEnabled(context)
         shizukuManager.setOnStateChangedListener {
             forceNextSync = true
-            scope.launch(Dispatchers.IO) {
+            controllerScope.launch {
                 syncPrivilegedStateAndSessions()
             }
         }
         MusicAppTracker.setOnMusicStateChangedListener {
             forceNextSync = true
-            scope.launch(Dispatchers.IO) {
+            controllerScope.launch {
                 syncPrivilegedStateAndSessions()
             }
         }
@@ -135,7 +158,7 @@ class AudioEngineController(
 
     fun triggerImmediateSessionSync() {
         forceNextSync = true
-        scope.launch(Dispatchers.IO) {
+        controllerScope.launch {
             syncPrivilegedStateAndSessions()
         }
     }
@@ -155,18 +178,7 @@ class AudioEngineController(
         val mode = currentEngineMode
         val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
         val privilegeReady = isPrivilegeReadyForMode(mode)
-        val forced = forceNextSync
         forceNextSync = false
-
-        if (!forced &&
-            mode == EngineMode.LEGACY &&
-            lastSyncedMode == EngineMode.LEGACY &&
-            lastSyncedPrivilegeReady == privilegeReady &&
-            masterEngine.isSession0Healthy()
-        ) {
-            refreshDiagnostics()
-            return
-        }
 
         lastSyncedMode = mode
         lastSyncedPrivilegeReady = privilegeReady
@@ -198,9 +210,25 @@ class AudioEngineController(
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         } else {
-            // EngineMode.LEGACY: zero session tracking; apply globally on output Mix session 0
-            MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
-            masterEngine.syncDiscoveredSessions(emptyList())
+            // EngineMode.LEGACY: combine broadcast/external sessions, non-prompting dumpsys discovery if available, and Global Mix 0
+            val legacySids = LinkedHashSet<Int>()
+            val canSilentDiscover = hasDumpPermission() ||
+                shizukuManager.state.value == ShizukuState.READY ||
+                shizukuManager.isRootAvailable()
+            if (canSilentDiscover) {
+                val discovered = shizukuManager.discoverAudioFlingerSessions(
+                    musicOnly = latestRenderParams.musicOnlyTracking
+                )
+                legacySids.addAll(discovered)
+            } else {
+                MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
+            }
+            legacySids.addAll(
+                MusicAppTracker.getLegacyTargetSessionIds(
+                    musicOnly = latestRenderParams.musicOnlyTracking
+                )
+            )
+            masterEngine.syncDiscoveredSessions(legacySids)
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         }
@@ -210,7 +238,7 @@ class AudioEngineController(
 
     private fun startSessionDiscoveryLoop() {
         sessionPollJob?.cancel()
-        sessionPollJob = scope.launch(Dispatchers.IO) {
+        sessionPollJob = controllerScope.launch {
             var pollTick = 0
             while (isActive) {
                 shizukuManager.refreshStatus()
@@ -382,8 +410,12 @@ class AudioEngineController(
     fun getCurrentRoute(): OutputRoute = currentRoute
 
     fun release() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         sessionPollJob?.cancel()
         telemetryJob?.cancel()
+        controllerScope.cancel()
         masterEngine.release()
     }
 }

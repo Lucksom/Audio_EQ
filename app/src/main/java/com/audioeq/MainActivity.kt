@@ -1,6 +1,7 @@
 package com.audioeq
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.audiofx.AudioEffect
 import android.os.Build
@@ -24,15 +25,20 @@ import com.audioeq.shizuku.ShizukuManager
 import com.audioeq.ui.AudioEqScreen
 import com.audioeq.ui.EqViewModel
 import com.audioeq.ui.theme.AudioEqTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+
+    private val externalSessionIdFlow = MutableStateFlow(-1)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val launchedSessionId = intent?.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1) ?: -1
+        captureIntentAudioSession(intent)
         setContent {
             val eqViewModel: EqViewModel = viewModel()
             val state by eqViewModel.uiState.collectAsStateWithLifecycle()
+            val launchedSessionId by externalSessionIdFlow.collectAsStateWithLifecycle()
             val lifecycleOwner = LocalLifecycleOwner.current
 
             DisposableEffect(lifecycleOwner, eqViewModel) {
@@ -80,6 +86,21 @@ class MainActivity : ComponentActivity() {
                     viewModel = eqViewModel
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureIntentAudioSession(intent)
+    }
+
+    private fun captureIntentAudioSession(intent: Intent?) {
+        val sid = intent?.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1) ?: -1
+        if (sid > 0) {
+            val pkg = intent?.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME) ?: callingPackage
+            MusicAppTracker.onExternalSessionOpened(applicationContext, sid, pkg)
+            externalSessionIdFlow.value = sid
         }
     }
 

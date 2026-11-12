@@ -1598,7 +1598,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        engineController.release()
+        if (!repository.masterEnabled.value) {
+            engineController.release()
+        }
         dspMonitor.release()
     }
 

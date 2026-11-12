@@ -250,10 +250,32 @@ object ShizukuManager {
         return execIfBound(command) ?: if (rootAccessVerified) execSuCommand(command) else null
     }
 
+    private fun execDirectDumpsys(serviceName: String): String? {
+        val ctx = appContext ?: return null
+        if (ctx.checkSelfPermission(android.Manifest.permission.DUMP) != PackageManager.PERMISSION_GRANTED) {
+            return null
+        }
+        return try {
+            val proc = ProcessBuilder("/system/bin/dumpsys", serviceName)
+                .redirectErrorStream(true)
+                .start()
+            runCatching { proc.outputStream.close() }
+            val out = proc.inputStream.bufferedReader().use { it.readText() }
+            val finished = proc.waitFor(2000L, TimeUnit.MILLISECONDS)
+            if (finished && out.isNotBlank() && !out.contains("Permission Denial", ignoreCase = true)) {
+                out
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     fun discoverAudioFlingerSessions(musicOnly: Boolean = true): List<Int> {
         val ctx = appContext
-        val audioOutput = execPrivilegedCommand("dumpsys audio")
-        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger")
+        val audioOutput = execPrivilegedCommand("dumpsys audio") ?: execDirectDumpsys("audio")
+        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger") ?: execDirectDumpsys("media.audio_flinger")
 
         if (ctx != null && musicOnly) {
             val musicSessions = com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
@@ -279,14 +301,14 @@ object ShizukuManager {
     }
 
     fun readBluetoothCodecSummary(): String? {
-        val output = execPrivilegedCommand("dumpsys bluetooth_manager") ?: return null
+        val output = execPrivilegedCommand("dumpsys bluetooth_manager") ?: execDirectDumpsys("bluetooth_manager") ?: return null
         val codecRegex = Regex("""(?:codecConfig|mCodecConfig|mCodecType|Selected codec)\s*[:=]?\s*([^\n,]+)""", RegexOption.IGNORE_CASE)
         val match = codecRegex.find(output)
         return match?.groupValues?.get(1)?.trim() ?: "Bluetooth (A2DP)"
     }
 
     fun readHardwareSampleRateHz(): Int {
-        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger") ?: return 48000
+        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger") ?: execDirectDumpsys("media.audio_flinger") ?: return 48000
         val regex = Regex("""Sample rate\s*[:=]?\s*(\d{4,6})\s*Hz""", RegexOption.IGNORE_CASE)
         val parsed = regex.find(flingerOutput)?.groupValues?.getOrNull(1)?.toIntOrNull()
         return when (parsed) {
