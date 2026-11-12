@@ -361,4 +361,11 @@ class AudioEqUnitTest {
         assertFalse(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.15.1", "1.0.15.1"))
         assertFalse(com.audioeq.data.GitHubUpdateChecker.isRemoteVersionNewer("v1.0.2", "1.0.15.1"))
     }
+
+    @Test
+    fun verifyOperatingModeBadgesAvoidAwaitingGrantWording() {
+        assertFalse(
+            com.audioeq.model.OperatingMode.SUSPENDED_PRIVILEGED.badge.contains("Grant", ignoreCase = true)
+        )
+    }
 }

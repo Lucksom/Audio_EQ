@@ -97,4 +97,53 @@ class AudioEqRobolectricTest {
         assertEquals("AudioEQ-v1.0.18.1.apk", parsed.apkFileName)
         assertTrue(parsed.changelog.contains("Fixed Shizuku/Root status badge"))
     }
+
+    @Test
+    fun `verify MusicAppTracker accepts music and media apps even when popular list is preloaded`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(
+            setOf("com.spotify.music", "com.google.android.apps.youtube.music")
+        )
+        assertTrue(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.miui.player",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+        assertTrue(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "app.morphe.android.youtube",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+        assertTrue(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.apple.android.music",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+        // Explicitly excluded popular package should be rejected; cleared exclusion re-enables it
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(
+            setOf("com.google.android.apps.youtube.music")
+        )
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(setOf("com.spotify.music"))
+        org.junit.Assert.assertFalse(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.spotify.music",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
+        org.junit.Assert.assertFalse(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.whatsapp",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+    }
 }

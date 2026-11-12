@@ -159,7 +159,13 @@ class AudioEngineController(
                 currentBluetoothCodec = null
             }
         } else {
-            masterEngine.syncDiscoveredSessions(MusicAppTracker.getVerifiedMusicSessionIds())
+            MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
+            val legacySids = if (isPrivilegedMode) {
+                MusicAppTracker.getVerifiedMusicSessionIds()
+            } else {
+                MusicAppTracker.getBroadcastSessionIds()
+            }
+            masterEngine.syncDiscoveredSessions(legacySids)
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         }
@@ -170,9 +176,17 @@ class AudioEngineController(
     private fun startSessionDiscoveryLoop() {
         sessionPollJob?.cancel()
         sessionPollJob = scope.launch(Dispatchers.IO) {
+            var pollTick = 0
             while (isActive) {
                 shizukuManager.refreshStatus()
+                if (currentEngineMode == EngineMode.ROOT &&
+                    !shizukuManager.isRootAvailable() &&
+                    pollTick % 3 == 0
+                ) {
+                    shizukuManager.verifyRootAccess(timeoutMs = 2500L)
+                }
                 syncPrivilegedStateAndSessions()
+                pollTick++
                 delay(2000L)
             }
         }

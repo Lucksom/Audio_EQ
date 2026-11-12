@@ -105,38 +105,19 @@ jobs:
             echo ""
             echo "### What's Changed"
             if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
-              COMMITS=$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s (\`%h\`)" || true)
-              if [ -n "$COMMITS" ]; then
-                echo "$COMMITS"
-              else
-                git log -1 --pretty=format:"- %s (\`%h\`)"
-              fi
-              echo ""
-              echo ""
-              echo "**Changes since \`${PREV_TAG}\`:**"
-              echo '```'
-              git diff --stat "${PREV_TAG}..HEAD" | tail -n 25 || true
-              echo '```'
+              LOG_ENTRIES=$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- **%s**%n%w(0,2,2)%b" || true)
             else
-              COMMITS=$(git log -n 15 --no-merges --pretty=format:"- %s (\`%h\`)" || true)
-              if [ -n "$COMMITS" ]; then
-                echo "$COMMITS"
-              else
-                echo "- Initial release build (${SHORT_SHA})"
-              fi
-              echo ""
-              echo ""
-              echo "**Latest commit details:**"
-              git log -1 --pretty=format:"%b" || true
-              echo ""
-              echo '```'
-              git diff-tree --no-commit-id --stat -r HEAD | tail -n 25 || true
-              echo '```'
+              LOG_ENTRIES=$(git log -n 10 --no-merges --pretty=format:"- **%s**%n%w(0,2,2)%b" || true)
+            fi
+            if [ -n "$LOG_ENTRIES" ]; then
+              echo "$LOG_ENTRIES" | awk 'NF || prev_nf { print; prev_nf = NF }'
+            else
+              echo "- Release build ${APP_VERSION_NAME} (${SHORT_SHA})"
             fi
             echo ""
             echo "---"
-            echo "- **App Version:** \`${APP_VERSION_NAME}\` (versionCode \`${APP_VERSION_CODE}\`)"
-            echo "- **Commit:** \`${GITHUB_SHA}\` (Run #${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT})"
+            echo "- **App Version:** \`${APP_VERSION_NAME}\` (Build \`${APP_VERSION_CODE}\`)"
+            echo "- **Commit:** \`${SHORT_SHA}\` (Run #${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT})"
           } > "$NOTES_FILE"
 
       - name: Build Signed Release APK (Max Free Runner Performance)

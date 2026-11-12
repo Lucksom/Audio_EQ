@@ -541,51 +541,51 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             shizukuManager.refreshStatus()
-            if (repository.engineMode.value == EngineMode.ROOT) {
-                val rootOk = shizukuManager.verifyRootAccess(timeoutMs = 3000L)
-                if (!rootOk) {
-                    val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
-                        EngineMode.ADB_SHIZUKU
-                    } else {
-                        EngineMode.LEGACY
-                    }
-                    repository.setEngineMode(fallback)
+            val savedMode = repository.engineMode.value
+            if (savedMode == EngineMode.ROOT) {
+                val rootOk = shizukuManager.verifyRootAccess(timeoutMs = 6000L)
+                if (rootOk) {
+                    shizukuManager.ensureBoundAndGrantPermissions()
                 }
-            } else if (shizukuManager.state.value == ShizukuState.READY &&
-                repository.engineMode.value != EngineMode.ADB_SHIZUKU
-            ) {
+            } else if (savedMode == EngineMode.ADB_SHIZUKU && shizukuManager.state.value == ShizukuState.READY) {
                 if (shizukuManager.isShizukuRunningAsRoot()) {
-                    shizukuManager.verifyRootAccess(timeoutMs = 2000L)
-                    repository.setEngineMode(EngineMode.ROOT)
-                } else {
-                    repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                    shizukuManager.verifyRootAccess(timeoutMs = 3000L)
                 }
+                shizukuManager.ensureBoundAndGrantPermissions()
             }
             engineController.triggerImmediateSessionSync()
         }
 
         viewModelScope.launch {
             var previousShizukuState = shizukuManager.state.value
-            if (previousShizukuState == ShizukuState.READY && shizukuManager.isShizukuRunningAsRoot()) {
+            if (previousShizukuState == ShizukuState.READY) {
                 shizukuManager.ensureBoundAndGrantPermissions()
             }
             shizukuManager.state.collect { newState ->
                 if (newState == ShizukuState.READY && previousShizukuState != ShizukuState.READY) {
-                    val wantRoot = pendingDesiredMode == EngineMode.ROOT ||
-                        repository.engineMode.value == EngineMode.ROOT ||
-                        shizukuManager.isShizukuRunningAsRoot()
-                    if (wantRoot && shizukuManager.verifyRootAccess(timeoutMs = 5000L)) {
-                        pendingDesiredMode = null
-                        repository.setEngineMode(EngineMode.ROOT)
-                        shizukuManager.ensureBoundAndGrantPermissions()
-                        engineController.triggerImmediateSessionSync()
-                        _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) applied — Root engine active"
+                    val currentMode = repository.engineMode.value
+                    val desired = pendingDesiredMode
+                    val shouldUpdateMode = desired != null || currentMode != EngineMode.LEGACY
+                    if (shouldUpdateMode) {
+                        val wantRoot = desired == EngineMode.ROOT ||
+                            currentMode == EngineMode.ROOT ||
+                            shizukuManager.isShizukuRunningAsRoot()
+                        if (wantRoot && shizukuManager.verifyRootAccess(timeoutMs = 5000L)) {
+                            pendingDesiredMode = null
+                            repository.setEngineMode(EngineMode.ROOT)
+                            shizukuManager.ensureBoundAndGrantPermissions()
+                            engineController.triggerImmediateSessionSync()
+                            _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) applied — Root engine active"
+                        } else {
+                            pendingDesiredMode = null
+                            repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                            shizukuManager.ensureBoundAndGrantPermissions()
+                            engineController.triggerImmediateSessionSync()
+                            _statusBanner.value = "Shizuku permission applied — ${shizukuManager.privilege()} active"
+                        }
                     } else {
-                        pendingDesiredMode = null
-                        repository.setEngineMode(EngineMode.ADB_SHIZUKU)
                         shizukuManager.ensureBoundAndGrantPermissions()
                         engineController.triggerImmediateSessionSync()
-                        _statusBanner.value = "Shizuku permission granted — ${shizukuManager.privilege()} active"
                     }
                 }
                 previousShizukuState = newState
@@ -665,7 +665,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.applyPreset(preset)
         repository.updateCurrentRouteProfile {
             it.copy(
-                preampDb = preset.recommendedPreampDb,
+                preampDb = if (it.limiterEnabled) 0f else preset.recommendedPreampDb,
                 subBassHighPassHz = preset.recommendedHighPassHz
             )
         }
@@ -1250,9 +1250,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             EngineMode.ADB_SHIZUKU -> {
-                if (!shizukuManager.isShizukuRunningAsRoot()) {
-                    shizukuManager.clearRootVerification()
-                }
                 repository.setEngineMode(EngineMode.ADB_SHIZUKU)
                 shizukuManager.refreshStatus()
                 when (shizukuManager.state.value) {
@@ -1263,7 +1260,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     ShizukuState.NEEDS_PERMISSION,
                     ShizukuState.DENIED_PERMANENTLY -> {
-                        _statusBanner.value = "Applying Shizuku permission — please grant prompt"
+                        _statusBanner.value = "Applying Shizuku permission — please allow prompt"
                         shizukuManager.requestPermission()
                         engineController.triggerImmediateSessionSync()
                     }
@@ -1282,7 +1279,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             }
             EngineMode.LEGACY -> {
                 pendingDesiredMode = null
-                shizukuManager.clearRootVerification()
                 repository.setEngineMode(EngineMode.LEGACY)
                 engineController.triggerImmediateSessionSync()
                 _statusBanner.value = "Legacy mode active"
@@ -1312,7 +1308,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             ) {
                 repository.setEngineMode(EngineMode.ROOT)
                 shizukuManager.requestPermission()
-                _statusBanner.value = "Waiting for Shizuku / Root (su) permission prompt…"
+                _statusBanner.value = "Waiting for Shizuku / Root (su) permission…"
+            } else if (shizukuManager.hasPreviousRootGrant()) {
+                repository.setEngineMode(EngineMode.ROOT)
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Root mode active — awaiting su response (standard EQ active)"
             } else {
                 val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
                     EngineMode.ADB_SHIZUKU
@@ -1321,7 +1321,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 repository.setEngineMode(fallback)
                 engineController.triggerImmediateSessionSync()
-                _statusBanner.value = "Root (su) permission not granted — using ${fallback.shortTitle} (${shizukuManager.privilege()})"
+                _statusBanner.value = "Root (su) not detected — using ${fallback.shortTitle} (${shizukuManager.privilege()})"
             }
         }
     }
@@ -1331,7 +1331,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             MusicAppTracker.isNotificationListenerEnabled(getApplication())
             shizukuManager.refreshStatus()
             if (repository.engineMode.value == EngineMode.ROOT && !shizukuManager.isRootAvailable()) {
-                shizukuManager.verifyRootAccess(timeoutMs = 3000L)
+                shizukuManager.verifyRootAccess(timeoutMs = 5000L)
             }
             if (shizukuManager.state.value == ShizukuState.READY) {
                 shizukuManager.ensureBoundAndGrantPermissions()
@@ -1343,7 +1343,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissRootWarningAndFallback() {
         pendingDesiredMode = null
         _showRootWarningDialog.value = false
-        shizukuManager.clearRootVerification()
         val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
             EngineMode.ADB_SHIZUKU
         } else {
@@ -1362,7 +1361,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         when (shizukuManager.state.value) {
             ShizukuState.NEEDS_PERMISSION,
             ShizukuState.DENIED_PERMANENTLY -> {
-                _statusBanner.value = "Applying Shizuku permission — please grant prompt"
+                _statusBanner.value = "Opening Shizuku permission prompt…"
                 shizukuManager.requestPermission()
             }
             ShizukuState.NOT_RUNNING -> {

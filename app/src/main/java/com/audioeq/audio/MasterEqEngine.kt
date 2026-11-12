@@ -9,7 +9,6 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
-import android.media.audiofx.BassBoost
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
@@ -90,21 +89,25 @@ class MasterEqEngine(
     private val requestedEngineMode = AtomicReference(EngineMode.LEGACY)
 
     private val dpSessions = ConcurrentHashMap<Int, DynamicsProcessing>()
+    private val dpBandCounts = ConcurrentHashMap<Int, Int>()
+    private val desiredSessionEnabled = ConcurrentHashMap<Int, Boolean>()
     private val eqSessions = ConcurrentHashMap<Int, Equalizer>()
     private val loudnessSessions = ConcurrentHashMap<Int, LoudnessEnhancer>()
     private val virtualizerSessions = ConcurrentHashMap<Int, Virtualizer>()
-    private val bassBoostSessions = ConcurrentHashMap<Int, BassBoost>()
     private val vendorBassBoostSessions = ConcurrentHashMap<Int, AudioEffect>()
     private var vendorSetParamMethod: java.lang.reflect.Method? = null
     private val hardwareEffectSessions = ConcurrentHashMap<Int, AudioEffect>()
     private val lastAppliedL = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedR = ConcurrentHashMap<Int, FloatArray>()
-    private val lastAppliedPostL = ConcurrentHashMap<Int, FloatArray>()
-    private val lastAppliedPostR = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedPreamp = ConcurrentHashMap<Int, Float>()
+    private val lastAppliedMbcKey = ConcurrentHashMap<Int, Int>()
+    private val lastAppliedLimiterKey = ConcurrentHashMap<Int, Int>()
+    private val lastAppliedVirtKey = ConcurrentHashMap<Int, Int>()
     private val knownSessions = ConcurrentHashMap.newKeySet<Int>()
 
     private val consecutiveErrors = AtomicInteger(0)
+    private val tickScheduled = AtomicBoolean(false)
+
     @Volatile
     var avgBinderWriteCostMs: Double = 0.35
         private set
@@ -127,6 +130,7 @@ class MasterEqEngine(
 
     private val tickRunnable = object : Runnable {
         override fun run() {
+            tickScheduled.set(false)
             if (!dirty.getAndSet(false)) return
             val t0 = SystemClock.elapsedRealtimeNanos()
             try {
@@ -141,7 +145,7 @@ class MasterEqEngine(
             }
             val dtMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0
             avgBinderWriteCostMs = 0.8 * avgBinderWriteCostMs + 0.2 * dtMs
-            if (dirty.get()) {
+            if (dirty.get() && tickScheduled.compareAndSet(false, true)) {
                 dspHandler.postDelayed(this, 16L)
             }
         }
@@ -458,7 +462,7 @@ class MasterEqEngine(
 
     private fun scheduleCoalescedUpdate() {
         dirty.set(true)
-        if (!dspHandler.hasCallbacks(tickRunnable)) {
+        if (tickScheduled.compareAndSet(false, true)) {
             dspHandler.postDelayed(tickRunnable, 16L)
         }
     }
@@ -466,86 +470,120 @@ class MasterEqEngine(
     private fun attachSessionInternal(sid: Int) {
         if (dpSessions.containsKey(sid) || eqSessions.containsKey(sid)) return
         val params = latestParams.get()
-        val bands = if (params.compatibility10Band) 10 else 31
-        currentBandCount = bands
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
-                val cfgBuilder = DynamicsProcessing.Config.Builder(
-                    DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-                    2,
-                    true,
-                    bands,
-                    true,
-                    6,
-                    true,
-                    bands,
-                    true
-                )
-                cfgBuilder.setPreferredFrameDuration(if (params.transientMode) 5.0f else 10.0f)
-                val cfg = cfgBuilder.build()
-                val dp = try {
-                    DynamicsProcessing(1000, sid, cfg)
-                } catch (_: Throwable) {
-                    DynamicsProcessing(0, sid, cfg)
-                }
-                dp.enabled = params.masterEnabled
+            val candidates = if (params.compatibility10Band) intArrayOf(10) else intArrayOf(31, 20, 10)
+            val variant = if (params.transientMode) {
+                DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION
+            } else {
+                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION
+            }
 
-                for (ch in 0..1) {
+            for (bands in candidates) {
+                var dp: DynamicsProcessing? = null
+                try {
+                    val cfgBuilder = DynamicsProcessing.Config.Builder(
+                        variant,
+                        2,
+                        true,
+                        bands,
+                        true,
+                        6,
+                        false,
+                        0,
+                        true
+                    )
+                    if (params.transientMode) {
+                        runCatching { cfgBuilder.setPreferredFrameDuration(5.0f) }
+                    }
+                    val cfg = cfgBuilder.build()
+
+                    val highPrioDp = runCatching { DynamicsProcessing(1000, sid, cfg) }.getOrNull()
+                    dp = if (highPrioDp != null && highPrioDp.hasControl()) {
+                        highPrioDp
+                    } else {
+                        runCatching { highPrioDp?.release() }
+                        val stdDp = runCatching { DynamicsProcessing(0, sid, cfg) }.getOrNull()
+                        if (stdDp != null && stdDp.hasControl()) {
+                            stdDp
+                        } else {
+                            runCatching { stdDp?.release() }
+                            null
+                        }
+                    }
+                    if (dp == null) continue
+
+                    dp.setControlStatusListener { _, controlGranted ->
+                        if (controlGranted) {
+                            dspHandler.post {
+                                lastAppliedL.remove(sid)
+                                lastAppliedR.remove(sid)
+                                lastAppliedPreamp.remove(sid)
+                                lastAppliedMbcKey.remove(sid)
+                                lastAppliedLimiterKey.remove(sid)
+                                scheduleCoalescedUpdate()
+                            }
+                        }
+                    }
+                    dp.setEnableStatusListener { _, isEnabled ->
+                        if (!isEnabled && desiredSessionEnabled[sid] == true) {
+                            dspHandler.post {
+                                runCatching {
+                                    dpSessions[sid]?.enabled = true
+                                }
+                                scheduleCoalescedUpdate()
+                            }
+                        }
+                    }
+
                     for (b in 0 until 6) {
-                        val mbcBand = dp.getMbcBandByChannelIndex(ch, b)
-                        mbcBand.isEnabled = true
-                        mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
-                        mbcBand.attackTime = Dsp.MBC_ATTACK_MS[b]
-                        mbcBand.releaseTime = Dsp.MBC_RELEASE_MS[b]
-                        mbcBand.ratio = 1.05f
-                        mbcBand.threshold = -0.8f
-                        mbcBand.kneeWidth = 6.0f
-                        mbcBand.noiseGateThreshold = -90.0f
-                        mbcBand.expanderRatio = 1.0f
-                        mbcBand.preGain = 0.0f
-                        mbcBand.postGain = 0.0f
-                        dp.setMbcBandByChannelIndex(ch, b, mbcBand)
+                        val mbcBand = DynamicsProcessing.MbcBand(
+                            false,
+                            Dsp.MBC_CUTOFFS[b],
+                            Dsp.MBC_ATTACK_MS[b],
+                            Dsp.MBC_RELEASE_MS[b],
+                            1.0f,
+                            0.0f,
+                            6.0f,
+                            -90.0f,
+                            1.0f,
+                            0.0f,
+                            0.0f
+                        )
+                        dp.setMbcBandAllChannelsTo(b, mbcBand)
                     }
-                }
 
-                dpSessions[sid] = dp
-                lastAppliedL[sid] = FloatArray(bands) { Float.NaN }
-                lastAppliedR[sid] = FloatArray(bands) { Float.NaN }
-                lastAppliedPostL[sid] = FloatArray(bands) { Float.NaN }
-                lastAppliedPostR[sid] = FloatArray(bands) { Float.NaN }
+                    desiredSessionEnabled[sid] = params.masterEnabled
+                    dp.enabled = params.masterEnabled
+                    dpSessions[sid] = dp
+                    dpBandCounts[sid] = bands
+                    currentBandCount = dpBandCounts[0] ?: bands
+                    lastAppliedL[sid] = FloatArray(bands) { Float.NaN }
+                    lastAppliedR[sid] = FloatArray(bands) { Float.NaN }
+                    lastAppliedPreamp.remove(sid)
+                    lastAppliedMbcKey.remove(sid)
+                    lastAppliedLimiterKey.remove(sid)
 
-                try {
-                    val virt = Virtualizer(0, sid)
-                    virtualizerSessions[sid] = virt
-                } catch (_: Throwable) {
-                }
-                try {
-                    val bb = BassBoost(0, sid)
-                    bassBoostSessions[sid] = bb
-                } catch (_: Throwable) {
-                }
-                if (sid > 0) {
-                    try {
-                        val le = LoudnessEnhancer(sid)
-                        loudnessSessions[sid] = le
-                    } catch (_: Throwable) {
+                    if (requestedEngineMode.get() == EngineMode.LEGACY) {
+                        activeOperatingMode = OperatingMode.LEGACY_TIER2_DP
                     }
+                    return
+                } catch (_: Throwable) {
+                    runCatching { dp?.release() }
                 }
-
-                tryAttachHardwareEffectSession(sid)
-
-                if (requestedEngineMode.get() == EngineMode.LEGACY) {
-                    activeOperatingMode = OperatingMode.LEGACY_TIER2_DP
-                }
-                return
-            } catch (_: Throwable) {
             }
         }
 
         if (sid >= 0) {
             try {
-                val eq = Equalizer(0, sid)
+                val eq = runCatching {
+                    val hi = Equalizer(1000, sid)
+                    if (hi.hasControl()) hi else {
+                        hi.release()
+                        Equalizer(0, sid)
+                    }
+                }.getOrElse { Equalizer(0, sid) }
+                desiredSessionEnabled[sid] = params.masterEnabled
                 eq.enabled = params.masterEnabled
                 eqSessions[sid] = eq
                 if (sid > 0) {
@@ -555,16 +593,6 @@ class MasterEqEngine(
                         loudnessSessions[sid] = le
                     } catch (_: Throwable) {
                     }
-                }
-                try {
-                    val virt = Virtualizer(0, sid)
-                    virtualizerSessions[sid] = virt
-                } catch (_: Throwable) {
-                }
-                try {
-                    val bb = BassBoost(0, sid)
-                    bassBoostSessions[sid] = bb
-                } catch (_: Throwable) {
                 }
                 tryAttachHardwareEffectSession(sid)
                 if (requestedEngineMode.get() == EngineMode.LEGACY && dpSessions.isEmpty()) {
@@ -615,6 +643,8 @@ class MasterEqEngine(
             } catch (_: Throwable) {
             }
         }
+        dpBandCounts.remove(sid)
+        desiredSessionEnabled.remove(sid)
         eqSessions.remove(sid)?.let {
             try {
                 it.release()
@@ -628,12 +658,6 @@ class MasterEqEngine(
             }
         }
         virtualizerSessions.remove(sid)?.let {
-            try {
-                it.release()
-            } catch (_: Throwable) {
-            }
-        }
-        bassBoostSessions.remove(sid)?.let {
             try {
                 it.release()
             } catch (_: Throwable) {
@@ -653,9 +677,10 @@ class MasterEqEngine(
         }
         lastAppliedL.remove(sid)
         lastAppliedR.remove(sid)
-        lastAppliedPostL.remove(sid)
-        lastAppliedPostR.remove(sid)
         lastAppliedPreamp.remove(sid)
+        lastAppliedMbcKey.remove(sid)
+        lastAppliedLimiterKey.remove(sid)
+        lastAppliedVirtKey.remove(sid)
     }
 
     private fun rebuildAllSessionsInternal() {
@@ -680,9 +705,42 @@ class MasterEqEngine(
         }, 120L)
     }
 
+    private fun map31ToSessionBands(
+        target31: DoubleArray,
+        bandCount: Int,
+        effectiveEnabled: Boolean
+    ): Pair<FloatArray, FloatArray> {
+        return when (bandCount) {
+            31 -> {
+                Dsp.RENDER_CUT to FloatArray(31) { k ->
+                    if (!effectiveEnabled) 0.0f else target31[k].toFloat()
+                }
+            }
+            10 -> {
+                Dsp.FALLBACK_10_CUT to FloatArray(10) { k ->
+                    if (!effectiveEnabled) 0.0f
+                    else {
+                        val nearest31 = Dsp.F_DP.indices.minByOrNull { abs(ln(Dsp.F_DP[it]) - ln(Dsp.F_USER[k])) } ?: 0
+                        target31[nearest31].toFloat()
+                    }
+                }
+            }
+            else -> {
+                val cutoffs = FloatArray(bandCount)
+                val gains = FloatArray(bandCount)
+                for (k in 0 until bandCount) {
+                    val renderIdx = if (bandCount <= 1) 0 else ((k.toDouble() / (bandCount - 1)) * 30.0).roundToInt().coerceIn(0, 30)
+                    cutoffs[k] = Dsp.RENDER_CUT[renderIdx]
+                    gains[k] = if (!effectiveEnabled) 0.0f else target31[renderIdx].toFloat()
+                }
+                cutoffs to gains
+            }
+        }
+    }
+
     private fun applyParamsOnWorker(params: EngineRenderParams) {
-        val isSuspended = activeOperatingMode == OperatingMode.SUSPENDED_PRIVILEGED || usbBitPerfectActive
-        val effectiveEnabled = params.masterEnabled && !isSuspended && !params.abxBypassCurve
+        val isSuspended = usbBitPerfectActive || params.abxBypassCurve
+        val effectiveEnabled = params.masterEnabled && !isSuspended
 
         val volIdx = try {
             audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -808,33 +866,11 @@ class MasterEqEngine(
             }
             (nonLimPreamp + loudnessMakeup).coerceIn(-12.0, 6.0)
         }
-        val volmaxMakeup = if (cfg.profile != AudioProfile.OFF) endpointSpec.volmaxMakeupDb.toDouble() else 0.0
-
-        val is10BandMode = params.compatibility10Band
-        val bandCutoffs = if (is10BandMode) Dsp.FALLBACK_10_CUT else Dsp.RENDER_CUT
-        val bandCount = bandCutoffs.size
-
-        val effL = FloatArray(bandCount) { k ->
-            if (!effectiveEnabled) 0.0f
-            else if (is10BandMode) {
-                val nearest31 = Dsp.F_DP.indices.minByOrNull { abs(ln(Dsp.F_DP[it]) - ln(Dsp.F_USER[k])) } ?: 0
-                targetL31[nearest31].toFloat()
-            } else {
-                targetL31[k].toFloat()
-            }
+        val volmaxMakeup = if (cfg.profile != AudioProfile.OFF) {
+            endpointSpec.volmaxMakeupDb.toDouble().coerceAtLeast(0.0)
+        } else {
+            0.0
         }
-        val effR = FloatArray(bandCount) { k ->
-            if (!effectiveEnabled) 0.0f
-            else if (is10BandMode) {
-                val nearest31 = Dsp.F_DP.indices.minByOrNull { abs(ln(Dsp.F_DP[it]) - ln(Dsp.F_USER[k])) } ?: 0
-                targetR31[nearest31].toFloat()
-            } else {
-                targetR31[k].toFloat()
-            }
-        }
-
-        val postL = FloatArray(bandCount) { 0.0f }
-        val postR = FloatArray(bandCount) { 0.0f }
 
         val leftInputGain = if (effectiveEnabled) (basePreamp + trimL + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
         val rightInputGain = if (effectiveEnabled) (basePreamp + trimR + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat() else 0.0f
@@ -844,95 +880,136 @@ class MasterEqEngine(
             cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
         } else 0f
 
+        val currentMode = requestedEngineMode.get()
+        val hasPrivilegedControl = (currentMode == EngineMode.ROOT && activeOperatingMode == OperatingMode.ROOT_GLOBAL) ||
+            (currentMode == EngineMode.ADB_SHIZUKU && activeOperatingMode == OperatingMode.SHIZUKU_GLOBAL)
         val hasSpecificMusicSessions = dpSessions.keys.any { it > 0 } || eqSessions.keys.any { it > 0 }
-        val useGlobalSessionOnly = !params.musicOnlyTracking && dpSessions.containsKey(0)
+        val hasGlobalSession = dpSessions.containsKey(0) || eqSessions.containsKey(0)
+        val useGlobalSessionOnly = !params.musicOnlyTracking && hasGlobalSession
+        val keepSession0EnabledInLegacy = !hasPrivilegedControl &&
+            (!hasSpecificMusicSessions || MusicAppTracker.hasActiveNonSessionMediaPlayback())
+        val fallbackSession0WhenPrivEmpty = hasPrivilegedControl && !hasSpecificMusicSessions
 
         val effectiveLimiterCeilingDb = if (isSpeakerRoute) {
-            minOf(params.limiterCeilingDb.toFloat(), -0.5f).coerceIn(-3.0f, -0.3f)
+            minOf(params.limiterCeilingDb.toFloat(), -0.3f).coerceIn(-3.0f, -0.1f)
         } else {
             params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f)
         }
 
+        fun resolveSessionEnabled(sid: Int): Boolean = when {
+            !effectiveEnabled -> false
+            useGlobalSessionOnly -> sid == 0
+            sid == 0 -> !params.musicOnlyTracking || keepSession0EnabledInLegacy || fallbackSession0WhenPrivEmpty
+            else -> !useGlobalSessionOnly
+        }
+
         for ((sid, dp) in dpSessions) {
             try {
-                val sessionEnabled = when {
-                    !effectiveEnabled -> false
-                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
-                    useGlobalSessionOnly && sid > 0 -> false
-                    else -> true
-                }
+                val sessionEnabled = resolveSessionEnabled(sid)
+                desiredSessionEnabled[sid] = sessionEnabled
                 if (dp.enabled != sessionEnabled) {
                     dp.enabled = sessionEnabled
                 }
                 val prevPre = lastAppliedPreamp[sid]
                 val preKey = leftInputGain * 100f + rightInputGain
                 if (prevPre == null || abs(prevPre - preKey) >= 0.02f) {
-                    dp.setInputGainbyChannel(0, leftInputGain)
-                    dp.setInputGainbyChannel(1, rightInputGain)
+                    if (!params.splitLREnabled && abs(leftInputGain - rightInputGain) < 0.01f) {
+                        dp.setInputGainAllChannelsTo(leftInputGain)
+                    } else {
+                        dp.setInputGainbyChannel(0, leftInputGain)
+                        dp.setInputGainbyChannel(1, rightInputGain)
+                    }
                     lastAppliedPreamp[sid] = preKey
                 }
 
-                val prevL = lastAppliedL.getOrPut(sid) { FloatArray(bandCount) { Float.NaN } }
-                val prevR = lastAppliedR.getOrPut(sid) { FloatArray(bandCount) { Float.NaN } }
-                val prevPostL = lastAppliedPostL.getOrPut(sid) { FloatArray(bandCount) { Float.NaN } }
-                val prevPostR = lastAppliedPostR.getOrPut(sid) { FloatArray(bandCount) { Float.NaN } }
+                val sessionBands = dpBandCounts[sid] ?: if (params.compatibility10Band) 10 else 31
+                val (bandCutoffs, effL) = map31ToSessionBands(targetL31, sessionBands, effectiveEnabled)
+                val (_, effR) = map31ToSessionBands(targetR31, sessionBands, effectiveEnabled)
 
-                for (k in 0 until bandCount) {
-                    if (prevL[k].isNaN() || abs(prevL[k] - effL[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effL[k])
-                        dp.setPreEqBandByChannelIndex(0, k, band)
-                        prevL[k] = effL[k]
-                    }
-                    if (prevR[k].isNaN() || abs(prevR[k] - effR[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effR[k])
-                        dp.setPreEqBandByChannelIndex(1, k, band)
-                        prevR[k] = effR[k]
-                    }
-                    if (prevPostL[k].isNaN() || abs(prevPostL[k] - postL[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], postL[k])
-                        dp.setPostEqBandByChannelIndex(0, k, band)
-                        prevPostL[k] = postL[k]
-                    }
-                    if (prevPostR[k].isNaN() || abs(prevPostR[k] - postR[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], postR[k])
-                        dp.setPostEqBandByChannelIndex(1, k, band)
-                        prevPostR[k] = postR[k]
-                    }
-                }
+                val prevL = lastAppliedL[sid]?.takeIf { it.size == sessionBands }
+                    ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedL[sid] = it }
+                val prevR = lastAppliedR[sid]?.takeIf { it.size == sessionBands }
+                    ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedR[sid] = it }
 
-                for (ch in 0..1) {
-                    for (b in 0 until 6) {
-                        val mbcBand = dp.getMbcBandByChannelIndex(ch, b)
-                        mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
-                        if (sessionEnabled && hasDialogueMbc && b in 2..3) {
-                            mbcBand.isEnabled = true
-                            mbcBand.attackTime = 2.5f
-                            mbcBand.releaseTime = 55.0f
-                            mbcBand.ratio = 1.0f + (0.5f * deFactor)
-                            mbcBand.threshold = -1.5f
-                            mbcBand.kneeWidth = 8.0f
-                            mbcBand.noiseGateThreshold = -75.0f
-                            mbcBand.expanderRatio = 1.0f
-                            mbcBand.preGain = 0.0f
-                            mbcBand.postGain = (0.8f * deFactor)
-                        } else {
-                            mbcBand.isEnabled = false
+                for (k in 0 until sessionBands) {
+                    if (!params.splitLREnabled) {
+                        if (prevL[k].isNaN() || abs(prevL[k] - effL[k]) >= 0.05f ||
+                            prevR[k].isNaN() || abs(prevR[k] - effL[k]) >= 0.05f
+                        ) {
+                            val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effL[k])
+                            dp.setPreEqBandAllChannelsTo(k, band)
+                            prevL[k] = effL[k]
+                            prevR[k] = effL[k]
                         }
-                        dp.setMbcBandByChannelIndex(ch, b, mbcBand)
+                    } else {
+                        if (prevL[k].isNaN() || abs(prevL[k] - effL[k]) >= 0.05f) {
+                            val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effL[k])
+                            dp.setPreEqBandByChannelIndex(0, k, band)
+                            prevL[k] = effL[k]
+                        }
+                        if (prevR[k].isNaN() || abs(prevR[k] - effR[k]) >= 0.05f) {
+                            val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effR[k])
+                            dp.setPreEqBandByChannelIndex(1, k, band)
+                            prevR[k] = effR[k]
+                        }
                     }
                 }
 
-                val lim = DynamicsProcessing.Limiter(
-                    true,
-                    params.limiterEnabled && sessionEnabled,
-                    0,
-                    Dsp.LIM_ATTACK_MS,
-                    Dsp.LIM_RELEASE_MS,
-                    Dsp.LIM_RATIO,
-                    effectiveLimiterCeilingDb,
-                    0.0f
-                )
-                dp.setLimiterAllChannelsTo(lim)
+                val dialogueActive = sessionEnabled && hasDialogueMbc
+                val mbcKey = if (dialogueActive) (cfg.dialogueAmount + 100) else 0
+                if (lastAppliedMbcKey[sid] != mbcKey) {
+                    for (b in 0 until 6) {
+                        val isBandActive = dialogueActive && b in 2..3
+                        val mbcBand = if (isBandActive) {
+                            DynamicsProcessing.MbcBand(
+                                true,
+                                Dsp.MBC_CUTOFFS[b],
+                                2.5f,
+                                55.0f,
+                                1.0f + (0.5f * deFactor),
+                                -1.5f,
+                                8.0f,
+                                -75.0f,
+                                1.0f,
+                                0.0f,
+                                0.8f * deFactor
+                            )
+                        } else {
+                            DynamicsProcessing.MbcBand(
+                                false,
+                                Dsp.MBC_CUTOFFS[b],
+                                Dsp.MBC_ATTACK_MS[b],
+                                Dsp.MBC_RELEASE_MS[b],
+                                1.0f,
+                                0.0f,
+                                6.0f,
+                                -90.0f,
+                                1.0f,
+                                0.0f,
+                                0.0f
+                            )
+                        }
+                        dp.setMbcBandAllChannelsTo(b, mbcBand)
+                    }
+                    lastAppliedMbcKey[sid] = mbcKey
+                }
+
+                val limActive = params.limiterEnabled && sessionEnabled
+                val limKey = (if (limActive) 1 else 0) * 10000 + (effectiveLimiterCeilingDb * 100f).roundToInt()
+                if (lastAppliedLimiterKey[sid] != limKey) {
+                    val lim = DynamicsProcessing.Limiter(
+                        true,
+                        limActive,
+                        0,
+                        Dsp.LIM_ATTACK_MS,
+                        Dsp.LIM_RELEASE_MS,
+                        6.0f,
+                        effectiveLimiterCeilingDb,
+                        0.0f
+                    )
+                    dp.setLimiterAllChannelsTo(lim)
+                    lastAppliedLimiterKey[sid] = limKey
+                }
             } catch (_: Throwable) {
             }
         }
@@ -942,15 +1019,25 @@ class MasterEqEngine(
         val combinedVirtNorm = maxOf(surroundContribution, manualWidthContribution)
         val virtStrength = (combinedVirtNorm * 1000f).roundToInt().coerceIn(0, 1000)
 
+        if (virtStrength > 0 && effectiveEnabled) {
+            for (sid in dpSessions.keys + eqSessions.keys) {
+                if (!resolveSessionEnabled(sid)) continue
+                if (!virtualizerSessions.containsKey(sid)) {
+                    runCatching {
+                        virtualizerSessions[sid] = Virtualizer(0, sid)
+                    }
+                }
+            }
+        }
+
         for ((sid, virt) in virtualizerSessions) {
             try {
-                val sessionEnabled = when {
-                    !effectiveEnabled -> false
-                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
-                    useGlobalSessionOnly && sid > 0 -> false
-                    else -> true
-                }
+                val sessionEnabled = resolveSessionEnabled(sid)
                 val wantVirt = sessionEnabled && virtStrength > 0
+                val virtKey = (if (wantVirt) virtStrength else -1) * 10 + (if (isSpeakerRoute) 1 else 0)
+                if (lastAppliedVirtKey[sid] == virtKey) continue
+                lastAppliedVirtKey[sid] = virtKey
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && wantVirt) {
                     val vMode = if (isSpeakerRoute) {
                         Virtualizer.VIRTUALIZATION_MODE_TRANSAURAL
@@ -977,13 +1064,6 @@ class MasterEqEngine(
         for ((_, vFx) in vendorBassBoostSessions) {
             try {
                 if (vFx.enabled) vFx.enabled = false
-            } catch (_: Throwable) {
-            }
-        }
-
-        for ((_, bb) in bassBoostSessions) {
-            try {
-                if (bb.enabled) bb.enabled = false
             } catch (_: Throwable) {
             }
         }
@@ -1042,23 +1122,16 @@ class MasterEqEngine(
             for ((sid, hwFx) in hardwareEffectSessions) {
                 try {
                     val dpHandlesSession = dpSessions.containsKey(sid)
-                    val sessionEnabled = if (dpHandlesSession) {
-                        false
-                    } else {
-                        when {
-                            !effectiveEnabled -> false
-                            params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
-                            useGlobalSessionOnly && sid > 0 -> false
-                            else -> true
-                        }
+                    val sessionEnabled = if (dpHandlesSession) false else resolveSessionEnabled(sid)
+                    if (hwFx.enabled != sessionEnabled) {
+                        hwFx.enabled = sessionEnabled
                     }
-                    hwFx.enabled = sessionEnabled
                     if (sessionEnabled) {
-                        val setParamMethod = AudioEffect::class.java.getMethod(
+                        val setParamMethod = vendorSetParamMethod ?: AudioEffect::class.java.getMethod(
                             "setParameter",
                             Int::class.javaPrimitiveType,
                             ByteArray::class.java
-                        )
+                        ).apply { isAccessible = true }.also { vendorSetParamMethod = it }
                         setParamMethod.invoke(hwFx, EFFECT_PARAM_CP_VALUES, payload)
                     }
                 } catch (_: Throwable) {
@@ -1068,13 +1141,11 @@ class MasterEqEngine(
 
         for ((sid, eq) in eqSessions) {
             try {
-                val sessionEnabled = when {
-                    !effectiveEnabled -> false
-                    params.musicOnlyTracking && sid == 0 && hasSpecificMusicSessions -> false
-                    useGlobalSessionOnly && sid > 0 -> false
-                    else -> true
+                val dpHandlesSession = dpSessions.containsKey(sid)
+                val sessionEnabled = if (dpHandlesSession) false else resolveSessionEnabled(sid)
+                if (eq.enabled != sessionEnabled) {
+                    eq.enabled = sessionEnabled
                 }
-                eq.enabled = sessionEnabled
                 val nBands = eq.numberOfBands.toInt()
                 val range = eq.bandLevelRange
                 val minMb = range[0].toInt()
@@ -1095,7 +1166,9 @@ class MasterEqEngine(
                 }
 
                 loudnessSessions[sid]?.let { le ->
-                    le.enabled = sessionEnabled
+                    if (le.enabled != sessionEnabled) {
+                        le.enabled = sessionEnabled
+                    }
                     val targetGainMb = if (sessionEnabled) {
                         val compMb = if (avgPinkGain < -0.1) ((-avgPinkGain).coerceIn(0.0, 4.5) * 100.0).roundToInt() else 0
                         val enhMb = if (cfg.bassEnabled || cfg.dialogueEnhancerEnabled || cfg.deepBassEnabled) 50 else 0

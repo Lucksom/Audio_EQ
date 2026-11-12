@@ -83,7 +83,7 @@ enum class OperatingMode(val badge: String) {
     SHIZUKU_GLOBAL("Shizuku · Global DSP"),
     LEGACY_TIER2_DP("Legacy · 31-Band DP"),
     LEGACY_TIER1_EQ("Legacy · 5-Band EQ"),
-    SUSPENDED_PRIVILEGED("Suspended · Awaiting Grant")
+    SUSPENDED_PRIVILEGED("Standard Engine · Awaiting Privilege")
 }
 
 enum class OutputRoute(

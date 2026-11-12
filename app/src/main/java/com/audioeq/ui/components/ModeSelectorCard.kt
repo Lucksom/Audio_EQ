@@ -230,17 +230,21 @@ fun ModeSelectorCard(
                         }
 
                         if (selectedMode == EngineMode.ADB_SHIZUKU) {
-                            val shizukuButtonText = when (shizukuState) {
-                                ShizukuState.NOT_INSTALLED -> "Install Shizuku (Zero-PC Setup)"
-                                ShizukuState.NOT_RUNNING -> "Open & Start Shizuku"
-                                ShizukuState.UNSUPPORTED_VERSION -> "Update Shizuku App"
-                                ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Permission"
-                                ShizukuState.DENIED_PERMANENTLY -> "Re-allow in Shizuku App"
-                                ShizukuState.READY -> if (diagnostics.dumpPermissionGranted) {
-                                    "Shizuku Ready ($shizukuPrivilege) · DUMP Active"
-                                } else {
+                            val shizukuButtonText = when {
+                                shizukuState == ShizukuState.READY && diagnostics.dumpPermissionGranted ->
+                                    "Shizuku Ready ($shizukuPrivilege) · Applied"
+                                shizukuState == ShizukuState.READY ->
                                     "Shizuku Ready ($shizukuPrivilege) · Sync DUMP"
-                                }
+                                diagnostics.rootAvailable ->
+                                    "Root Active ($shizukuPrivilege) · Applied"
+                                diagnostics.dumpPermissionGranted ->
+                                    "ADB DUMP Granted · Applied"
+                                shizukuState == ShizukuState.NOT_INSTALLED -> "Install Shizuku (Zero-PC Setup)"
+                                shizukuState == ShizukuState.NOT_RUNNING -> "Open & Start Shizuku"
+                                shizukuState == ShizukuState.UNSUPPORTED_VERSION -> "Update Shizuku App"
+                                shizukuState == ShizukuState.NEEDS_PERMISSION -> "Allow Shizuku Permission"
+                                shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Open Shizuku App"
+                                else -> "Sync Shizuku"
                             }
                             Button(
                                 onClick = onShizukuAction,

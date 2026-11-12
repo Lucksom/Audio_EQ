@@ -85,7 +85,13 @@ object MusicAppTracker {
         "com.oppo.music",
         "com.oneplus.music",
         "com.huawei.music",
-        "com.google.android.music"
+        "com.google.android.music",
+        "com.google.android.youtube",
+        "app.morphe.android.youtube",
+        "app.revanced.android.youtube",
+        "app.revanced.android.apps.youtube.music",
+        "com.vanced.android.youtube",
+        "com.vanced.android.apps.youtube.music"
     )
 
     private val EXCLUDED_NON_MUSIC_PACKAGES = setOf(
@@ -131,14 +137,28 @@ object MusicAppTracker {
         "tv.plex.labs.plexamp" to "Plexamp",
         "app.symfonium.music.player" to "Symfonium",
         "com.foobar2000.foobar2000" to "foobar2000",
-        "com.neutroncode.mp" to "Neutron Music Player"
+        "com.neutroncode.mp" to "Neutron Music Player",
+        "com.miui.player" to "Mi Music",
+        "com.sec.android.app.music" to "Samsung Music",
+        "org.oxycblt.auxio" to "Auxio"
     )
+
+    private val POPULAR_MUSIC_PACKAGE_SET: Set<String> by lazy {
+        POPULAR_MUSIC_PACKAGES.map { it.first }.toSet()
+    }
 
     private val _selectedMusicPackages = MutableStateFlow<Set<String>>(emptySet())
     val selectedMusicPackages: StateFlow<Set<String>> = _selectedMusicPackages.asStateFlow()
 
+    private val _excludedMusicPackages = MutableStateFlow<Set<String>>(emptySet())
+    val excludedMusicPackages: StateFlow<Set<String>> = _excludedMusicPackages.asStateFlow()
+
     fun setSelectedMusicPackages(pkgs: Set<String>) {
         _selectedMusicPackages.value = pkgs
+    }
+
+    fun setExcludedMusicPackages(pkgs: Set<String>) {
+        _excludedMusicPackages.value = pkgs
     }
 
     private val broadcastMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
@@ -158,6 +178,9 @@ object MusicAppTracker {
 
     private val _trackedSessionsSummary = MutableStateFlow("Monitoring music players")
     val trackedSessionsSummary: StateFlow<String> = _trackedSessionsSummary.asStateFlow()
+
+    @Volatile
+    private var activeMediaPlaybackCount: Int = 0
 
     @Volatile
     private var onMusicStateChanged: (() -> Unit)? = null
@@ -209,16 +232,14 @@ object MusicAppTracker {
         val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         if (pkg == context.packageName || pkg.startsWith("com.audioeq")) return false
         if (pkg in EXCLUDED_NON_MUSIC_PACKAGES) return false
+        if (pkg in _excludedMusicPackages.value) return false
 
-        val selected = _selectedMusicPackages.value
-        if (selected.isNotEmpty()) {
-            return pkg in selected
-        }
+        if (pkg in _selectedMusicPackages.value) return true
 
         val lower = pkg.lowercase(Locale.US)
         if (lower.contains("telecom") || lower.contains("dialer") || lower.contains("inputmethod") ||
             lower.contains("keyboard") || lower.contains("ringtone") || lower.contains("alarm") ||
-            lower.contains(" deskclock") || lower.contains(".tts")
+            lower.contains("deskclock") || lower.contains(".tts")
         ) {
             return false
         }
@@ -290,6 +311,7 @@ object MusicAppTracker {
     }
 
     fun updatePrivilegedMusicSessions(context: Context, sessions: List<TrackedMusicSession>) {
+        if (privilegedMusicSessions.isEmpty() && sessions.isEmpty()) return
         privilegedMusicSessions.clear()
         for (s in sessions) {
             if (s.sessionId > 0) {
@@ -297,6 +319,18 @@ object MusicAppTracker {
             }
         }
         rebuildSummary(context)
+    }
+
+    fun getBroadcastSessionIds(): Set<Int> = LinkedHashSet(broadcastMusicSessions.keys)
+
+    fun hasActiveNonSessionMediaPlayback(): Boolean {
+        val activePkgs = _activeMediaPackages.value
+        if (activePkgs.isEmpty()) {
+            return activeMediaPlaybackCount > broadcastMusicSessions.size
+        }
+        val broadcastPkgs = broadcastMusicSessions.values.map { it.packageName }.toSet()
+        return activePkgs.any { it !in broadcastPkgs } ||
+            activeMediaPlaybackCount > broadcastMusicSessions.size
     }
 
     fun updateNotificationMediaPackages(
@@ -322,7 +356,7 @@ object MusicAppTracker {
         context: Context,
         configs: List<AudioPlaybackConfiguration>
     ) {
-        var anyMediaPlaying = false
+        var mediaCount = 0
         for (cfg in configs) {
             val attr = cfg.audioAttributes ?: continue
             if (attr.usage == AudioAttributes.USAGE_MEDIA &&
@@ -330,12 +364,14 @@ object MusicAppTracker {
                     attr.contentType == AudioAttributes.CONTENT_TYPE_UNKNOWN ||
                     attr.contentType == AudioAttributes.CONTENT_TYPE_MOVIE)
             ) {
-                anyMediaPlaying = true
-                break
+                mediaCount++
             }
         }
+        val prevCount = activeMediaPlaybackCount
+        activeMediaPlaybackCount = mediaCount
+        val anyMediaPlaying = mediaCount > 0
         val combinedPlaying = anyMediaPlaying || _activeMediaPackages.value.isNotEmpty()
-        if (_activeMusicPlaying.value != combinedPlaying) {
+        if (_activeMusicPlaying.value != combinedPlaying || prevCount != mediaCount) {
             _activeMusicPlaying.value = combinedPlaying
             rebuildSummary(context)
             onMusicStateChanged?.invoke()
@@ -624,6 +660,9 @@ object EqualizerNotificationHelper {
             .build()
     }
 
+    @Volatile
+    private var lastNotificationSignature: String? = null
+
     fun updateOrCancelPersistentNotification(
         context: Context,
         masterEnabled: Boolean,
@@ -634,6 +673,14 @@ object EqualizerNotificationHelper {
         musicSummary: String
     ) {
         try {
+            val signature = if (!masterEnabled) {
+                "OFF"
+            } else {
+                "ON|$presetName|$profileTitle|$routeLabel|$engineShortTitle|$musicSummary"
+            }
+            if (lastNotificationSignature == signature) return
+            lastNotificationSignature = signature
+
             if (!masterEnabled) {
                 NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
                 runCatching {
@@ -647,7 +694,10 @@ object EqualizerNotificationHelper {
                     context,
                     Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED
-                if (!granted) return
+                if (!granted) {
+                    lastNotificationSignature = null
+                    return
+                }
             }
 
             val notification = buildNotification(

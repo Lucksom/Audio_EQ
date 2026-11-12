@@ -1363,30 +1363,28 @@ fun SettingsAndDiagnosticsSheet(
                     }
                 }
 
-                if (selectedMode != EngineMode.LEGACY ||
-                    shizukuState == ShizukuState.READY ||
-                    shizukuState == ShizukuState.NEEDS_PERMISSION
-                ) {
+                val privilegeAlreadyReady = (selectedMode == EngineMode.ROOT && diagnostics.rootAvailable) ||
+                    (selectedMode == EngineMode.ADB_SHIZUKU &&
+                        (shizukuState == ShizukuState.READY || diagnostics.dumpPermissionGranted || diagnostics.rootAvailable))
+                if (selectedMode != EngineMode.LEGACY) {
                     val isRootMode = selectedMode == EngineMode.ROOT
                     val actionLabel = when {
-                        isRootMode && diagnostics.rootAvailable -> "Root Applied · Re-sync"
-                        isRootMode && shizukuState == ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Root"
-                        isRootMode -> "Verify & Apply Root (su)"
-                        shizukuState == ShizukuState.READY ->
-                            if (selectedMode == EngineMode.ADB_SHIZUKU) "Applied · Re-sync" else "Apply Shizuku"
-                        shizukuState == ShizukuState.NEEDS_PERMISSION ||
-                            shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Grant Shizuku Permission"
+                        isRootMode && diagnostics.rootAvailable -> "Applied · Re-sync"
+                        isRootMode -> "Verify & Apply (su)"
+                        privilegeAlreadyReady -> "Applied · Re-sync"
+                        shizukuState == ShizukuState.NEEDS_PERMISSION -> "Allow in Shizuku"
+                        shizukuState == ShizukuState.DENIED_PERMANENTLY -> "Open Shizuku App"
                         shizukuState == ShizukuState.NOT_RUNNING -> "Open Shizuku App"
                         shizukuState == ShizukuState.NOT_INSTALLED -> "Install Shizuku"
                         else -> "Connect Shizuku"
                     }
                     val statusLabel = when {
                         isRootMode && diagnostics.rootAvailable ->
-                            "Privilege: ${shizukuPrivilege.ifBlank { "Root (su uid=0)" }} [APPLIED]"
+                            "Privilege: ${shizukuPrivilege.ifBlank { "Root (su uid=0)" }} · Applied"
                         isRootMode ->
-                            "Privilege: Root (su) not yet granted (${shizukuState.name})"
-                        shizukuState == ShizukuState.READY ->
-                            "Privilege: ${shizukuPrivilege.ifBlank { "Shizuku Shell (adb uid=2000)" }} [APPLIED]"
+                            "Privilege: Root (su) pending approval (${shizukuState.name})"
+                        privilegeAlreadyReady ->
+                            "Privilege: ${shizukuPrivilege.ifBlank { if (diagnostics.rootAvailable) "Root (su uid=0)" else "ADB / Shizuku" }} · Applied"
                         else ->
                             "Shizuku: ${shizukuState.name} (${shizukuPrivilege.ifBlank { "none" }})"
                     }
@@ -1457,9 +1455,9 @@ fun SettingsAndDiagnosticsSheet(
                         )
                         Text(
                             text = if (diagnostics.notificationAccessGranted) {
-                                "Granted · Tracking active media player notifications"
+                                "Active · Tracking active media player notifications"
                             } else {
-                                "Grant notification access to detect running audio players"
+                                "Optional · Enable notification access to identify media players"
                             },
                             fontSize = 12.sp,
                             color = if (diagnostics.notificationAccessGranted) palette.primary else palette.onVar
@@ -1479,7 +1477,7 @@ fun SettingsAndDiagnosticsSheet(
                             .testTag("notification_access_button")
                     ) {
                         Text(
-                            text = if (diagnostics.notificationAccessGranted) "Active" else "Grant",
+                            text = if (diagnostics.notificationAccessGranted) "Active" else "Enable",
                             fontFamily = SpaceGroteskFontFamily,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,

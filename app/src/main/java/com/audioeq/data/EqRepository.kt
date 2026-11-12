@@ -109,6 +109,7 @@ class EqRepository(context: Context) {
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(loadExcludedMusicPackages())
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(_selectedMusicPackages.value)
     }
 
@@ -119,6 +120,7 @@ class EqRepository(context: Context) {
         private const val KEY_ACTIVE_DEVICE_KEY = "active_device_key"
         private const val KEY_ROOT_WARNING_ACCEPTED = "root_warning_accepted"
         private const val KEY_SELECTED_MUSIC_PACKAGES = "selected_music_packages"
+        private const val KEY_EXCLUDED_MUSIC_PACKAGES = "excluded_music_packages"
         private const val KEY_COMPAT_10_BAND = "compat_10_band"
         private const val KEY_TRANSIENT_MODE = "transient_mode"
         private const val KEY_USB_BIT_PERFECT = "usb_bit_perfect"
@@ -182,18 +184,33 @@ class EqRepository(context: Context) {
 
     fun toggleMusicPackage(pkg: String) {
         val current = _selectedMusicPackages.value.toMutableSet()
+        val excluded = loadExcludedMusicPackages().toMutableSet()
         if (current.contains(pkg)) {
             current.remove(pkg)
+            excluded.add(pkg)
         } else {
             current.add(pkg)
+            excluded.remove(pkg)
         }
+        prefs.edit().putStringSet(KEY_EXCLUDED_MUSIC_PACKAGES, excluded).apply()
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(excluded)
         setSelectedMusicPackages(current)
     }
 
+    private fun loadExcludedMusicPackages(): Set<String> {
+        return prefs.getStringSet(KEY_EXCLUDED_MUSIC_PACKAGES, emptySet())?.toSet() ?: emptySet()
+    }
+
     private fun loadSelectedMusicPackages(): Set<String> {
+        val excluded = loadExcludedMusicPackages()
+        val popular = com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.map { it.first }
+            .filter { it !in excluded }
+            .toSet()
         val stored = prefs.getStringSet(KEY_SELECTED_MUSIC_PACKAGES, null)
-        if (stored != null) return stored
-        return com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.map { it.first }.toSet()
+        if (stored != null) {
+            return (stored + popular) - excluded
+        }
+        return popular
     }
 
     fun setCompatibility10Band(enabled: Boolean) {

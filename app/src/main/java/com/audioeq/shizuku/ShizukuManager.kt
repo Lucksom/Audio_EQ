@@ -44,10 +44,24 @@ object ShizukuManager {
     private var rootAccessVerified: Boolean = false
 
     @Volatile
+    private var workingSuBinary: String? = null
+
+    @Volatile
     private var dumpGrantAttempted: Boolean = false
 
     @Volatile
     private var onStateChangedListener: ((ShizukuState) -> Unit)? = null
+
+    private val suBinaryCandidates = listOf(
+        "su",
+        "/system/bin/su",
+        "/system/xbin/su",
+        "/sbin/su",
+        "/debug_ramdisk/su",
+        "/su/bin/su",
+        "/data/adb/ksu/bin/su",
+        "/data/adb/ap/bin/su"
+    )
 
     operator fun invoke(context: Context): ShizukuManager {
         init(context)
@@ -74,15 +88,17 @@ object ShizukuManager {
         refresh()
         if (isShizukuRunningAsRoot()) {
             rootAccessVerified = true
+            persistRootHint(true)
             _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(_state.value)
             return true
         }
 
         val suDirect = runSuIdCheck(timeoutMs)
-
         if (suDirect) {
             rootAccessVerified = true
+            persistRootHint(true)
+            grantDumpViaSuAsync()
             _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(_state.value)
             return true
@@ -104,29 +120,105 @@ object ShizukuManager {
             false
         }
 
-        rootAccessVerified = shizukuSu
+        if (shizukuSu) {
+            rootAccessVerified = true
+            persistRootHint(true)
+        }
         _privilegeSummary.value = privilege()
         onStateChangedListener?.invoke(_state.value)
         return shizukuSu
     }
 
-    private fun runSuIdCheck(timeoutMs: Long): Boolean {
-        val candidates = listOf("su", "/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su")
-        for (bin in candidates) {
-            val ok = try {
-                val process = Runtime.getRuntime().exec(arrayOf(bin, "-c", "id"))
-                val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-                if (!finished) {
-                    process.destroyForcibly()
-                    false
-                } else {
-                    val output = process.inputStream.bufferedReader().use { it.readText() }
-                    process.exitValue() == 0 && output.contains("uid=0")
-                }
-            } catch (_: Throwable) {
-                false
+    private fun persistRootHint(granted: Boolean) {
+        val ctx = appContext ?: return
+        runCatching {
+            ctx.getSharedPreferences("audio_eq_priv_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("root_verified_hint", granted)
+                .apply()
+        }
+    }
+
+    fun hasPreviousRootGrant(): Boolean {
+        val ctx = appContext ?: return false
+        return runCatching {
+            ctx.getSharedPreferences("audio_eq_priv_prefs", Context.MODE_PRIVATE)
+                .getBoolean("root_verified_hint", false)
+        }.getOrDefault(false)
+    }
+
+    private fun runSuProcess(bin: String, command: String, useDashC: Boolean, timeoutMs: Long): Pair<Int, String>? {
+        return try {
+            val pb = if (useDashC) {
+                ProcessBuilder(bin, "-c", command)
+            } else {
+                ProcessBuilder(bin)
             }
-            if (ok) return true
+            pb.redirectErrorStream(true)
+            val process = pb.start()
+            runCatching {
+                if (!useDashC) {
+                    process.outputStream.bufferedWriter().use { w ->
+                        w.write(command)
+                        w.newLine()
+                        w.write("exit")
+                        w.newLine()
+                        w.flush()
+                    }
+                } else {
+                    process.outputStream.close()
+                }
+            }
+            val outputHolder = StringBuilder()
+            val readerThread = Thread {
+                runCatching {
+                    process.inputStream.bufferedReader().use { r ->
+                        outputHolder.append(r.readText())
+                    }
+                }
+            }.apply {
+                isDaemon = true
+                start()
+            }
+            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                readerThread.join(150)
+                null
+            } else {
+                readerThread.join(300)
+                process.exitValue() to outputHolder.toString()
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun runSuIdCheck(timeoutMs: Long): Boolean {
+        val perBinTimeout = timeoutMs.coerceIn(1500L, 10_000L)
+        val ordered = buildList {
+            workingSuBinary?.let { add(it) }
+            addAll(suBinaryCandidates)
+        }.distinct()
+
+        for (bin in ordered) {
+            if (bin.startsWith("/") && !java.io.File(bin).exists()) continue
+            val dashC = runSuProcess(bin, "id", useDashC = true, timeoutMs = perBinTimeout)
+            if (dashC == null) {
+                // Timed out waiting on su prompt or IO; avoid double-prompting another su variant
+                continue
+            }
+            if (dashC.first == 0 && dashC.second.contains("uid=0")) {
+                workingSuBinary = bin
+                return true
+            }
+            if (dashC.first != 0) {
+                val interactive = runSuProcess(bin, "id", useDashC = false, timeoutMs = perBinTimeout)
+                if (interactive != null && interactive.first == 0 && interactive.second.contains("uid=0")) {
+                    workingSuBinary = bin
+                    return true
+                }
+            }
         }
         return false
     }
@@ -137,18 +229,11 @@ object ShizukuManager {
     }
 
     private fun execSuCommand(command: String): String? {
-        return try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-            val finished = process.waitFor(2500, TimeUnit.MILLISECONDS)
-            if (finished && process.exitValue() == 0) {
-                process.inputStream.bufferedReader().use { it.readText() }.takeIf { it.isNotBlank() }
-            } else {
-                process.destroyForcibly()
-                null
-            }
-        } catch (_: Throwable) {
-            null
-        }
+        val bin = workingSuBinary ?: "su"
+        val res = runSuProcess(bin, command, useDashC = true, timeoutMs = 2500L)
+            ?: runSuProcess(bin, command, useDashC = false, timeoutMs = 2500L)
+            ?: return null
+        return if (res.first == 0) res.second else null
     }
 
     private fun execPrivilegedCommand(command: String): String? {
@@ -291,6 +376,7 @@ object ShizukuManager {
                     if (isShizukuAppInstalled()) ShizukuState.NOT_RUNNING else ShizukuState.NOT_INSTALLED
                 Shizuku.isPreV11() || Shizuku.getVersion() < 11 -> ShizukuState.UNSUPPORTED_VERSION
                 Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> ShizukuState.READY
+                Shizuku.shouldShowRequestPermissionRationale() -> ShizukuState.DENIED_PERMANENTLY
                 else -> ShizukuState.NEEDS_PERMISSION
             }
         } catch (_: Throwable) {
@@ -298,6 +384,7 @@ object ShizukuManager {
         }
         if (newState == ShizukuState.READY && isShizukuRunningAsRoot()) {
             rootAccessVerified = true
+            persistRootHint(true)
         }
         val newPriv = privilege()
         _state.value = newState
@@ -332,13 +419,15 @@ object ShizukuManager {
         refresh()
         runCatching {
             when (_state.value) {
-                ShizukuState.NEEDS_PERMISSION,
-                ShizukuState.DENIED_PERMANENTLY -> {
+                ShizukuState.NEEDS_PERMISSION -> {
                     if (Shizuku.pingBinder()) {
                         Shizuku.requestPermission(REQUEST_CODE)
                     } else {
                         openShizukuApp()
                     }
+                }
+                ShizukuState.DENIED_PERMANENTLY -> {
+                    openShizukuApp()
                 }
                 ShizukuState.NOT_RUNNING -> openShizukuApp()
                 ShizukuState.NOT_INSTALLED -> openShizukuDownloadPage()
@@ -360,6 +449,8 @@ object ShizukuManager {
             tryGrantDumpPermissionAsync()
             _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(ShizukuState.READY)
+        } else if (rootAccessVerified) {
+            grantDumpViaSuAsync()
         }
     }
 
@@ -372,6 +463,22 @@ object ShizukuManager {
                 val pkg = ctx.packageName
                 execIfBound("pm grant $pkg android.permission.DUMP")
                 execIfBound("pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
+                _privilegeSummary.value = privilege()
+                onStateChangedListener?.invoke(_state.value)
+            }
+        }.start()
+    }
+
+    private fun grantDumpViaSuAsync() {
+        val ctx = appContext ?: return
+        if (!rootAccessVerified) return
+        val hasDump = ctx.checkSelfPermission(android.Manifest.permission.DUMP) == PackageManager.PERMISSION_GRANTED
+        if (hasDump) return
+        Thread {
+            runCatching {
+                val pkg = ctx.packageName
+                execSuCommand("pm grant $pkg android.permission.DUMP")
+                execSuCommand("pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
                 _privilegeSummary.value = privilege()
                 onStateChangedListener?.invoke(_state.value)
             }
@@ -447,9 +554,10 @@ object ShizukuManager {
             method.isAccessible = true
             val proc = method.invoke(null, arrayOf("sh", "-c", command), null, null) as? Process
                 ?: return null
+            runCatching { proc.outputStream.close() }
             val out = proc.inputStream.bufferedReader().use { it.readText() }
-            proc.waitFor(2000, TimeUnit.MILLISECONDS)
-            out.takeIf { it.isNotBlank() }
+            val finished = proc.waitFor(2000, TimeUnit.MILLISECONDS)
+            if (finished && proc.exitValue() == 0) out else null
         } catch (_: Throwable) {
             null
         }
@@ -490,7 +598,7 @@ object ShizukuManager {
         if (s != null) {
             try {
                 val out = s.exec(command)
-                if (!out.startsWith("ERROR") && out.isNotBlank()) {
+                if (!out.startsWith("ERROR")) {
                     return out
                 }
             } catch (_: Throwable) {
