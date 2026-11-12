@@ -383,4 +383,43 @@ class AudioEqUnitTest {
             com.audioeq.model.LegacyGlobalMixMode.fromId(null)
         )
     }
+
+    @Test
+    fun verifyLegacyMixEnginePreferenceForOffloadVsAosp() {
+        assertTrue(
+            com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
+                legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.AUTO,
+                vendorOffloadDetected = true,
+                sdkInt = 34
+            )
+        )
+        assertFalse(
+            com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
+                legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.AUTO,
+                vendorOffloadDetected = false,
+                sdkInt = 34
+            )
+        )
+        assertTrue(
+            com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
+                legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.OFFLOAD_EQ,
+                vendorOffloadDetected = false,
+                sdkInt = 34
+            )
+        )
+        assertFalse(
+            com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
+                legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.DYNAMICS_PROCESSING,
+                vendorOffloadDetected = true,
+                sdkInt = 34
+            )
+        )
+        assertTrue(
+            com.audioeq.audio.MasterEqEngine.shouldPreferNativeEqForLegacyMix(
+                legacyMixMode = com.audioeq.model.LegacyGlobalMixMode.DYNAMICS_PROCESSING,
+                vendorOffloadDetected = false,
+                sdkInt = 26
+            )
+        )
+    }
 }

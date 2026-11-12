@@ -81,6 +81,20 @@ class MasterEqEngine(
         val EFFECT_TYPE_HARDWARE_DSP: UUID = UUID.fromString("9d4921da-8225-4f29-aefa-39537a04bcaa")
         val EFFECT_UUID_IMPL_SW: UUID = UUID.fromString("f22224d7-a540-4161-9c9a-e53a43681a9c")
         const val EFFECT_PARAM_CP_VALUES: Int = 5
+        private val EFFECT_PRIORITIES = intArrayOf(1_000_000, 10_000, 1000, 0)
+
+        fun shouldPreferNativeEqForLegacyMix(
+            legacyMixMode: LegacyGlobalMixMode,
+            vendorOffloadDetected: Boolean,
+            sdkInt: Int = Build.VERSION.SDK_INT
+        ): Boolean {
+            if (sdkInt < Build.VERSION_CODES.P) return true
+            return when (legacyMixMode) {
+                LegacyGlobalMixMode.OFFLOAD_EQ -> true
+                LegacyGlobalMixMode.DYNAMICS_PROCESSING -> false
+                LegacyGlobalMixMode.AUTO -> vendorOffloadDetected
+            }
+        }
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -178,14 +192,16 @@ class MasterEqEngine(
                     if (cleanedPkg == ctx.packageName || cleanedPkg?.startsWith("com.audioeq") == true) {
                         return
                     }
+                    if (requestedEngineMode.get() == EngineMode.LEGACY) {
+                        return
+                    }
                     val isMusicApp = MusicAppTracker.onBroadcastSessionOpened(
                         context = ctx,
                         sessionId = sid,
                         packageName = cleanedPkg,
                         contentType = contentType
                     )
-                    val isLegacy = requestedEngineMode.get() == EngineMode.LEGACY
-                    if (!isLegacy && latestParams.get().musicOnlyTracking && !isMusicApp) {
+                    if (latestParams.get().musicOnlyTracking && !isMusicApp) {
                         return
                     }
                     knownSessions.add(sid)
@@ -196,6 +212,9 @@ class MasterEqEngine(
                     }
                 }
                 AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION -> {
+                    if (requestedEngineMode.get() == EngineMode.LEGACY) {
+                        return
+                    }
                     MusicAppTracker.onBroadcastSessionClosed(ctx, sid)
                     knownSessions.remove(sid)
                     dspHandler.post {
@@ -210,6 +229,7 @@ class MasterEqEngine(
 
     private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList< android.media.AudioPlaybackConfiguration>?) {
+            if (requestedEngineMode.get() == EngineMode.LEGACY) return
             if (configs != null) {
                 MusicAppTracker.updatePlaybackConfigurations(context, configs)
                 scheduleCoalescedUpdate()
@@ -288,6 +308,14 @@ class MasterEqEngine(
                     impl.contains("oppo") ||
                     impl.contains("vivo") ||
                     impl.contains("oneplus") ||
+                    impl.contains("realme") ||
+                    impl.contains("huawei") ||
+                    impl.contains("honor") ||
+                    impl.contains("motorola") ||
+                    impl.contains("moto") ||
+                    impl.contains("dts") ||
+                    impl.contains("nxp") ||
+                    impl.contains("waves") ||
                     name.contains("offload")
             }
         } catch (_: Throwable) {
@@ -299,11 +327,10 @@ class MasterEqEngine(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return true
         if (sid != 0) return false
         if (requestedEngineMode.get() != EngineMode.LEGACY) return false
-        return when (params.legacyGlobalMixMode) {
-            LegacyGlobalMixMode.OFFLOAD_EQ -> true
-            LegacyGlobalMixMode.DYNAMICS_PROCESSING -> false
-            LegacyGlobalMixMode.AUTO -> false
-        }
+        return shouldPreferNativeEqForLegacyMix(
+            legacyMixMode = params.legacyGlobalMixMode,
+            vendorOffloadDetected = vendorOffloadEqualizerDetected
+        )
     }
 
     private fun registerReceiversAndCallbacks() {
@@ -453,11 +480,21 @@ class MasterEqEngine(
         lastPrivilegeReady = privilegeReady
         val prevMode = requestedEngineMode.getAndSet(mode)
         dspHandler.post {
+            if (mode == EngineMode.LEGACY) {
+                val nonZero = knownSessions.filter { it != 0 }
+                for (sid in nonZero) {
+                    knownSessions.remove(sid)
+                    detachSessionInternal(sid)
+                }
+                knownSessions.add(0)
+            }
             val wantNative0 = shouldUseNativeEqForSession(0)
             val hasDp0 = dpSessions.containsKey(0)
             val hasEq0 = eqSessions.containsKey(0)
             if (prevMode != mode && ((wantNative0 && hasDp0) || (!wantNative0 && hasEq0))) {
                 detachSessionInternal(0)
+                attachSessionInternal(0)
+            } else if (!hasDp0 && !hasEq0) {
                 attachSessionInternal(0)
             }
             updateActiveOperatingMode()
@@ -486,11 +523,30 @@ class MasterEqEngine(
     fun syncDiscoveredSessions(discoveredSids: Collection<Int>) {
         dspHandler.post {
             val mode = requestedEngineMode.get()
+            if (mode == EngineMode.LEGACY) {
+                // Global output mode: operate strictly on session 0 without tracking any sessions.
+                val toRemove = knownSessions.filter { it != 0 }
+                var changed = toRemove.isNotEmpty()
+                for (sid in toRemove) {
+                    knownSessions.remove(sid)
+                    detachSessionInternal(sid)
+                }
+                knownSessions.add(0)
+                if (!dpSessions.containsKey(0) && !eqSessions.containsKey(0)) {
+                    attachSessionInternal(0)
+                    changed = true
+                }
+                updateActiveOperatingMode()
+                if (changed) {
+                    applyParamsOnWorker(latestParams.get())
+                }
+                notifySessionsUpdated()
+                return@post
+            }
+
             val all = HashSet<Int>()
             all.addAll(discoveredSids)
-            if (mode == EngineMode.LEGACY) {
-                all.addAll(MusicAppTracker.getAllBroadcastSessionIds())
-            } else if (latestParams.get().musicOnlyTracking) {
+            if (latestParams.get().musicOnlyTracking) {
                 all.addAll(MusicAppTracker.getVerifiedMusicSessionIds())
             }
             all.add(0)
@@ -513,6 +569,7 @@ class MasterEqEngine(
 
     fun attachSession(sid: Int) {
         if (sid <= 0) return
+        if (requestedEngineMode.get() == EngineMode.LEGACY) return
         MusicAppTracker.onExternalSessionOpened(context, sid, null)
         dspHandler.post {
             knownSessions.add(sid)
@@ -585,7 +642,7 @@ class MasterEqEngine(
     ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
         val candidates = if (params.compatibility10Band) intArrayOf(10) else intArrayOf(31, 20, 10)
-        val priorities = intArrayOf(Int.MAX_VALUE, 100_000, 1000, 0)
+        val priorities = EFFECT_PRIORITIES
         val variant = if (params.transientMode) {
             DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION
         } else {
@@ -642,6 +699,10 @@ class MasterEqEngine(
                         }
                     }
 
+                    val (initCutoffs, _) = map31ToSessionBands(DoubleArray(31), bands, true)
+                    for (k in 0 until bands) {
+                        dp.setPreEqBandAllChannelsTo(k, DynamicsProcessing.EqBand(true, initCutoffs[k], 0.0f))
+                    }
                     for (b in 0 until 6) {
                         val mbcBand = DynamicsProcessing.MbcBand(
                             false,
@@ -685,7 +746,7 @@ class MasterEqEngine(
         params: EngineRenderParams,
         requireControl: Boolean
     ): Boolean {
-        val priorities = intArrayOf(Int.MAX_VALUE, 100_000, 1000, 0)
+        val priorities = EFFECT_PRIORITIES
         for (prio in priorities) {
             var eq: Equalizer? = null
             try {
@@ -1056,20 +1117,10 @@ class MasterEqEngine(
             params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f)
         }
 
-        fun hasAttachedControllingSession(): Boolean {
-            return knownSessions.any { otherSid ->
-                otherSid > 0 && (
-                    dpSessions[otherSid]?.let { runCatching { it.hasControl() }.getOrDefault(false) } == true ||
-                        eqSessions[otherSid]?.let { runCatching { it.hasControl() }.getOrDefault(false) } == true
-                    )
-            }
-        }
-
         fun resolveSessionEnabled(sid: Int): Boolean {
             if (!effectiveEnabled) return false
             if (currentMode == EngineMode.LEGACY) {
-                if (sid > 0) return true
-                return !hasAttachedControllingSession() || MusicAppTracker.hasActiveNonSessionMediaPlayback()
+                return sid == 0
             }
             if (!params.musicOnlyTracking && hasGlobalSession) {
                 return sid == 0
@@ -1086,9 +1137,6 @@ class MasterEqEngine(
                     lastAppliedR.remove(sid)
                     lastAppliedPreamp.remove(sid)
                     continue
-                }
-                if (dp.enabled != sessionEnabled) {
-                    dp.enabled = sessionEnabled
                 }
                 val prevPre = lastAppliedPreamp[sid]
                 val preKey = leftInputGain * 100f + rightInputGain
@@ -1190,6 +1238,9 @@ class MasterEqEngine(
                     dp.setLimiterAllChannelsTo(lim)
                     lastAppliedLimiterKey[sid] = limKey
                 }
+                if (dp.enabled != sessionEnabled) {
+                    dp.enabled = sessionEnabled
+                }
             } catch (_: Throwable) {
             }
         }
@@ -1203,8 +1254,18 @@ class MasterEqEngine(
             for (sid in dpSessions.keys + eqSessions.keys) {
                 if (!resolveSessionEnabled(sid)) continue
                 if (!virtualizerSessions.containsKey(sid)) {
-                    runCatching {
-                        virtualizerSessions[sid] = Virtualizer(0, sid)
+                    for (vPrio in EFFECT_PRIORITIES) {
+                        val cand = runCatching { Virtualizer(vPrio, sid) }.getOrNull() ?: continue
+                        if (runCatching { cand.hasControl() }.getOrDefault(false)) {
+                            virtualizerSessions[sid] = cand
+                            break
+                        }
+                        runCatching { cand.release() }
+                    }
+                    if (!virtualizerSessions.containsKey(sid)) {
+                        runCatching {
+                            virtualizerSessions[sid] = Virtualizer(0, sid)
+                        }
                     }
                 }
             }
@@ -1345,9 +1406,6 @@ class MasterEqEngine(
                     lastAppliedEqKey.remove(sid)
                     return@runCatching
                 }
-                if (eq.enabled != sessionEnabled) {
-                    eq.enabled = sessionEnabled
-                }
                 val nBands = eq.numberOfBands.toInt()
                 if (nBands <= 0) return@runCatching
                 val range = runCatching { eq.bandLevelRange }.getOrElse { shortArrayOf(-1500, 1500) }
@@ -1358,9 +1416,16 @@ class MasterEqEngine(
                 val bandFreqRanges = (0 until nBands).map { b ->
                     runCatching {
                         val r = eq.getBandFreqRange(b.toShort())
-                        val lo = (r[0] / 1000.0).coerceAtLeast(10.0)
-                        val hi = (r[1] / 1000.0).coerceAtLeast(lo + 1.0)
-                        lo to hi
+                        val loRaw = r.getOrElse(0) { 0 } / 1000.0
+                        val hiRaw = r.getOrElse(1) { 0 } / 1000.0
+                        if (hiRaw > loRaw && loRaw >= 10.0 && hiRaw <= 24000.0) {
+                            loRaw to hiRaw
+                        } else {
+                            val centerHz = runCatching { eq.getCenterFreq(b.toShort()) / 1000.0 }
+                                .getOrElse { defaultCentersHz.getOrElse(b) { 1000.0 } }
+                                .coerceAtLeast(20.0)
+                            (centerHz * 0.707) to (centerHz * 1.414)
+                        }
                     }.getOrElse {
                         val centerHz = runCatching { eq.getCenterFreq(b.toShort()) / 1000.0 }
                             .getOrElse { defaultCentersHz.getOrElse(b) { 1000.0 } }
@@ -1385,6 +1450,9 @@ class MasterEqEngine(
                         eq.setBandLevel(b.toShort(), finalBandMbs[b].toShort())
                     }
                     lastAppliedEqKey[sid] = eqKey
+                }
+                if (eq.enabled != sessionEnabled) {
+                    eq.enabled = sessionEnabled
                 }
             }
 
@@ -1416,9 +1484,8 @@ class MasterEqEngine(
                     }
                     val targetGainMb = if (sessionEnabled) {
                         val posPreampMb = if (leftInputGain > 0.05f) (leftInputGain * 100f).roundToInt() else 0
-                        val compMb = if (avgPinkGain < -0.1) ((-avgPinkGain).coerceIn(0.0, 4.5) * 100.0).roundToInt() else 0
-                        val enhMb = if (cfg.dialogueEnhancerEnabled) (cfg.dialogueAmount * 6) else 0
-                        (posPreampMb + maxOf(compMb, enhMb)).coerceIn(0, 800)
+                        val enhMb = if (cfg.dialogueEnhancerEnabled) (cfg.dialogueAmount * 8) else 0
+                        (posPreampMb + enhMb).coerceIn(0, 800)
                     } else 0
                     val wantLoudness = sessionEnabled && targetGainMb > 0
                     val loudKey = if (wantLoudness) targetGainMb else 0
@@ -1481,27 +1548,19 @@ class MasterEqEngine(
     fun getLegacyEngineSummary(): String {
         val dp0 = dpSessions[0]
         val eq0 = eqSessions[0]
-        val dpBroadcast = dpSessions.keys.count { it > 0 }
-        val eqBroadcast = eqSessions.keys.count { it > 0 }
-        val mixPart = when {
+        return when {
             dp0 != null -> {
                 val bands = dpBandCounts[0] ?: 31
                 val ctrl = runCatching { dp0.hasControl() }.getOrDefault(false)
-                if (ctrl) "Mix 0: DP $bands-Band (OK)" else "Mix 0: DP $bands-Band (No Control)"
+                if (ctrl) "Mix 0: DP $bands-Band (Active)" else "Mix 0: DP $bands-Band (No Control)"
             }
             eq0 != null -> {
                 val bands = runCatching { eq0.numberOfBands.toInt() }.getOrDefault(5)
                 val ctrl = runCatching { eq0.hasControl() }.getOrDefault(false)
-                if (ctrl) "Mix 0: Native ${bands}-Band (OK)" else "Mix 0: Native ${bands}-Band (Blocked)"
+                if (ctrl) "Mix 0: Native ${bands}-Band FX (Active)" else "Mix 0: Native ${bands}-Band FX (No Control)"
             }
             else -> "Mix 0: Unavailable"
         }
-        val sessionPart = if (dpBroadcast + eqBroadcast > 0) {
-            " · +${dpBroadcast + eqBroadcast} App Session(s)"
-        } else {
-            ""
-        }
-        return mixPart + sessionPart
     }
 
     fun release() {

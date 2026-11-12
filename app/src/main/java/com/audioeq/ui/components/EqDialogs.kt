@@ -1382,7 +1382,45 @@ fun SettingsAndDiagnosticsSheet(
                 val privilegeAlreadyReady = (selectedMode == EngineMode.ROOT && diagnostics.rootAvailable) ||
                     (selectedMode == EngineMode.ADB_SHIZUKU &&
                         (shizukuState == ShizukuState.READY || diagnostics.dumpPermissionGranted || diagnostics.rootAvailable))
-                if (selectedMode != EngineMode.LEGACY) {
+                if (selectedMode == EngineMode.LEGACY) {
+                    HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Legacy Global Output Engine",
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 13.sp,
+                                color = palette.onSurface
+                            )
+                            Text(
+                                text = diagnostics.legacyEngineSummary,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 10.sp,
+                                color = palette.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            text = legacyGlobalMixMode.subtitle,
+                            fontSize = 11.5.sp,
+                            color = palette.onVar
+                        )
+                        V7SegmentedRow(
+                            options = LegacyGlobalMixMode.entries.map { it.id to it.label },
+                            selectedValue = legacyGlobalMixMode.id,
+                            enabled = true,
+                            onSelect = { selectedId ->
+                                onSelectLegacyGlobalMixMode(LegacyGlobalMixMode.fromId(selectedId))
+                            },
+                            modifier = Modifier.testTag("legacy_global_mix_mode")
+                        )
+                    }
+                } else {
                     val isRootMode = selectedMode == EngineMode.ROOT
                     val actionLabel = when {
                         isRootMode && diagnostics.rootAvailable -> "Applied · Re-sync"
@@ -1592,44 +1630,6 @@ fun SettingsAndDiagnosticsSheet(
             }
 
             SettingsGroupCard(title = "RENDERER & USB DAC") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Legacy Global Mix Engine",
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 14.sp,
-                            color = palette.onSurface
-                        )
-                        if (diagnostics.vendorOffloadEqualizerDetected) {
-                            Text(
-                                text = "Offload EQ detected",
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontSize = 10.sp,
-                                color = palette.primary
-                            )
-                        }
-                    }
-                    Text(
-                        text = legacyGlobalMixMode.subtitle,
-                        fontSize = 12.sp,
-                        color = palette.onVar
-                    )
-                    V7SegmentedRow(
-                        options = LegacyGlobalMixMode.entries.map { it.id to it.label },
-                        selectedValue = legacyGlobalMixMode.id,
-                        enabled = true,
-                        onSelect = { selectedId ->
-                            onSelectLegacyGlobalMixMode(LegacyGlobalMixMode.fromId(selectedId))
-                        },
-                        modifier = Modifier.testTag("legacy_global_mix_mode")
-                    )
-                }
-
-                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
                 V7SwitchRow(
                     title = "Compatibility mode (10 bands)",
@@ -1865,15 +1865,15 @@ fun SettingsAndDiagnosticsSheet(
             SettingsGroupCard(title = "ENGINE MODE ACCESSIBILITY & ASSIGNED PROCESSES") {
                 DiagnosticRow(
                     "Legacy Mode (Zero ADB/Root)",
-                    "Broadcast Sessions · 31-Band DP PreEq · 0Hz Deep Bass Shelf · 6-Band MBC · Mode 2 HRTF (>234Hz) · Q8 Peak Limiter"
+                    "Global Output Mix (Session 0) · Zero Session Tracking · Native 5-Band FX (EQ/BassBoost/Virtualizer/Loudness) or 31-Band DP"
                 )
                 DiagnosticRow(
                     "ADB / Shizuku Mode (UID 2000)",
-                    "AudioFlinger Session Discovery · Real-Time Sample Rate (fs=${diagnostics.hardwareSampleRateHz}Hz) · BT A2DP Codec Inspection"
+                    "AudioFlinger Session Discovery · Per-App Isolation · Real-Time Sample Rate (fs=${diagnostics.hardwareSampleRateHz}Hz) · BT A2DP Codec Inspection"
                 )
                 DiagnosticRow(
                     "Root Mode (su UID 0)",
-                    "Global Mix Session 0 · Direct Hardware 20-Band Q4 Register Write · System Dual-EQ Conflict Guard",
+                    "AudioFlinger Session Discovery · Direct Hardware 20-Band Q4 Register Write · System Dual-EQ Conflict Guard",
                     showBottomBorder = false
                 )
             }

@@ -54,9 +54,9 @@ enum class EngineMode(
     LEGACY(
         id = "legacy",
         title = "Legacy Mode",
-        subtitle = "Zero-Permission · Session Broadcast + DP 20/31-Band",
-        badgeText = "Legacy (Broadcast)",
-        description = "Standard sandbox mode. Attaches to media players broadcasting audio sessions using DynamicsProcessing (Deep Bass Low-Shelf, 20-Band Octave Interpolation, Endpoint Peak Limiter & Binaural Virtualizer)."
+        subtitle = "Zero-Permission · Global Output Mix (Session 0)",
+        badgeText = "Legacy (Global)",
+        description = "Standard non-root global output mode. Applies effects directly to the device global audio output (session 0) everywhere without tracking any apps or sessions."
     ),
     ADB_SHIZUKU(
         id = "adb_shizuku",
@@ -93,18 +93,18 @@ enum class LegacyGlobalMixMode(
 ) {
     AUTO(
         id = "auto",
-        label = "Auto (DP + Fallback)",
-        subtitle = "Uses 31-Band DynamicsProcessing on Global Mix & app sessions, falling back to 5-Band Native EQ if unavailable"
+        label = "Auto (Smart Global)",
+        subtitle = "Uses Native 5-Band FX on vendor/offload devices or 31-Band DP on standard AOSP global output (Session 0)"
     ),
     OFFLOAD_EQ(
         id = "offload_eq",
-        label = "Compatible 5-Band FX",
-        subtitle = "Prefers native Equalizer + BassBoost + Virtualizer + LoudnessEnhancer on Global Mix session 0"
+        label = "Native 5-Band FX",
+        subtitle = "Uses Equalizer + BassBoost + Virtualizer + LoudnessEnhancer directly on Global Output (Session 0)"
     ),
     DYNAMICS_PROCESSING(
         id = "dynamics_processing",
         label = "31-Band DP",
-        subtitle = "Forces 31-Band DynamicsProcessing on Global Mix session 0 with automatic 5-Band fallback if blocked"
+        subtitle = "Forces 31-Band DynamicsProcessing on Global Output (Session 0) with 5-Band FX fallback if unavailable"
     );
 
     companion object {

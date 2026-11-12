@@ -167,14 +167,16 @@ class AudioEngineController(
             } else {
                 currentBluetoothCodec = null
             }
-        } else {
+        } else if (isPrivilegedMode) {
             MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
-            val fallbackSids = if (isPrivilegedMode) {
-                MusicAppTracker.getVerifiedMusicSessionIds()
-            } else {
-                MusicAppTracker.getAllBroadcastSessionIds()
-            }
+            val fallbackSids = MusicAppTracker.getVerifiedMusicSessionIds()
             masterEngine.syncDiscoveredSessions(fallbackSids)
+            currentSampleRateHz = 48000
+            currentBluetoothCodec = null
+        } else {
+            // EngineMode.LEGACY: zero session tracking; apply globally on output Mix session 0
+            MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
+            masterEngine.syncDiscoveredSessions(emptyList())
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         }

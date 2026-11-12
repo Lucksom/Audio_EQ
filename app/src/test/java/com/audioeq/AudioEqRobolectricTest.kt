@@ -261,4 +261,26 @@ class AudioEqRobolectricTest {
         com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 502)
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
     }
+
+    @Test
+    fun `verify MasterEqEngine in Legacy mode ignores session tracking and keeps global mode`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = com.audioeq.audio.MasterEqEngine(
+            context = context,
+            onRouteOrDeviceChanged = { _, _, _ -> },
+            onSessionsChanged = { _, _ -> }
+        )
+        try {
+            engine.setEngineMode(com.audioeq.model.EngineMode.LEGACY, privilegeReady = true)
+            engine.attachSession(404)
+            engine.syncDiscoveredSessions(listOf(404, 505))
+            Thread.sleep(150L)
+
+            val sids = engine.getActiveSessionIds()
+            org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(404))
+            org.junit.Assert.assertFalse("Legacy mode must not track external sid > 0", sids.contains(505))
+        } finally {
+            engine.release()
+        }
+    }
 }

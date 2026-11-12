@@ -631,6 +631,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     compatibility10Band = state.compatibility10Band,
                     transientMode = state.transientMode,
                     usbBitPerfectEnabled = state.usbBitPerfectEnabled,
+                    abxBypassCurve = state.isAbCompare,
                     activeRoute = state.activeRoute,
                     musicOnlyTracking = state.musicOnlyTrackingEnabled,
                     legacyGlobalMixMode = state.legacyGlobalMixMode
