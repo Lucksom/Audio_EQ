@@ -217,4 +217,48 @@ class AudioEqRobolectricTest {
         assertEquals("Universal (All Audio)", com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value)
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
     }
+
+    @Test
+    fun `verify Legacy mode tracks all broadcast sessions universally while privileged mode strictly filters`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(setOf("com.spotify.music"))
+        com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = true,
+            hasPrivilegedControl = false
+        )
+
+        // Open broadcast session from an unselected app (e.g., Chrome) and a selected app (Spotify)
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
+            context = context,
+            sessionId = 501,
+            packageName = "com.android.chrome",
+            contentType = android.media.audiofx.AudioEffect.CONTENT_TYPE_MOVIE
+        )
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
+            context = context,
+            sessionId = 502,
+            packageName = "com.spotify.music",
+            contentType = android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+        )
+
+        val legacyAll = com.audioeq.audio.MusicAppTracker.getAllBroadcastSessionIds()
+        assertTrue(legacyAll.contains(501))
+        assertTrue(legacyAll.contains(502))
+
+        // Switch to privileged mode (Root/Shizuku) -> strict filtering excludes 501 (Chrome)
+        com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = false,
+            hasPrivilegedControl = false
+        )
+        val verifiedOnly = com.audioeq.audio.MusicAppTracker.getVerifiedMusicSessionIds()
+        org.junit.Assert.assertFalse(verifiedOnly.contains(501))
+        assertTrue(verifiedOnly.contains(502))
+
+        // Cleanup
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 501)
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 502)
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
+    }
 }

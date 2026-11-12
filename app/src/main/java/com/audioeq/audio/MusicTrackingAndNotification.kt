@@ -183,6 +183,7 @@ object MusicAppTracker {
         privilegedMusicSessions.entries.removeIf { !isPackageCurrentlyAllowed(it.value.packageName) }
     }
 
+    private val allBroadcastSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
     private val broadcastMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
     private val privilegedMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
 
@@ -406,23 +407,49 @@ object MusicAppTracker {
         contentType: Int
     ): Boolean {
         if (sessionId <= 0) return false
-        if (!isMusicAppPackage(context, packageName, contentType)) {
+        val cleanedPkg = packageName?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanedPkg == context.packageName || cleanedPkg?.startsWith("com.audioeq") == true) {
             return false
         }
         playbackWentIdleSinceBroadcast = false
-        val pkg = packageName?.takeIf { it.isNotBlank() } ?: "music.player"
+        val pkg = cleanedPkg ?: "audio.session"
         val label = resolveAppLabel(context, pkg)
-        broadcastMusicSessions[sessionId] = TrackedMusicSession(
+        val tracked = TrackedMusicSession(
             sessionId = sessionId,
             packageName = pkg,
             appLabel = label,
             source = "AudioEffect"
         )
+        allBroadcastSessions[sessionId] = tracked
+
+        if (!isMusicAppPackage(context, cleanedPkg, contentType)) {
+            broadcastMusicSessions.remove(sessionId)
+            rebuildSummary(context)
+            return false
+        }
+        broadcastMusicSessions[sessionId] = tracked
         rebuildSummary(context)
         return true
     }
 
+    fun onExternalSessionOpened(context: Context, sessionId: Int, packageName: String? = null) {
+        if (sessionId <= 0) return
+        val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: "external.player"
+        if (pkg == context.packageName || pkg.startsWith("com.audioeq")) return
+        playbackWentIdleSinceBroadcast = false
+        allBroadcastSessions.putIfAbsent(
+            sessionId,
+            TrackedMusicSession(
+                sessionId = sessionId,
+                packageName = pkg,
+                appLabel = resolveAppLabel(context, pkg),
+                source = "ControlPanel"
+            )
+        )
+    }
+
     fun onBroadcastSessionClosed(context: Context, sessionId: Int) {
+        allBroadcastSessions.remove(sessionId)
         broadcastMusicSessions.remove(sessionId)
         privilegedMusicSessions.remove(sessionId)
         rebuildSummary(context)
@@ -441,16 +468,19 @@ object MusicAppTracker {
         rebuildSummary(context)
     }
 
+    fun getAllBroadcastSessionIds(): Set<Int> = LinkedHashSet(allBroadcastSessions.keys)
+
     fun getBroadcastSessionIds(): Set<Int> = LinkedHashSet(broadcastMusicSessions.keys)
 
     fun hasActiveNonSessionMediaPlayback(): Boolean {
+        val sessions = if (legacyUniversalActive) allBroadcastSessions else broadcastMusicSessions
         val activePkgs = _activeMediaPackages.value
-        val broadcastPkgs = broadcastMusicSessions.values.map { it.packageName }.toSet()
+        val broadcastPkgs = sessions.values.map { it.packageName }.toSet()
         if (activePkgs.isNotEmpty()) {
             return activePkgs.any { it !in broadcastPkgs } ||
-                activeMediaPlaybackCount > broadcastMusicSessions.size
+                activeMediaPlaybackCount > sessions.size
         }
-        return activeMediaPlaybackCount > broadcastMusicSessions.size ||
+        return activeMediaPlaybackCount > sessions.size ||
             (activeMediaPlaybackCount > 0 && playbackWentIdleSinceBroadcast)
     }
 
@@ -480,17 +510,18 @@ object MusicAppTracker {
         var mediaCount = 0
         for (cfg in configs) {
             val attr = cfg.audioAttributes ?: continue
-            if (attr.usage == AudioAttributes.USAGE_MEDIA &&
-                (attr.contentType == AudioAttributes.CONTENT_TYPE_MUSIC ||
-                    attr.contentType == AudioAttributes.CONTENT_TYPE_UNKNOWN ||
-                    attr.contentType == AudioAttributes.CONTENT_TYPE_MOVIE)
-            ) {
+            val isMediaOrGameUsage = attr.usage == AudioAttributes.USAGE_MEDIA ||
+                attr.usage == AudioAttributes.USAGE_GAME ||
+                attr.usage == AudioAttributes.USAGE_UNKNOWN
+            val isExcludedContent = attr.contentType == AudioAttributes.CONTENT_TYPE_SONIFICATION ||
+                attr.contentType == AudioAttributes.CONTENT_TYPE_SPEECH
+            if (isMediaOrGameUsage && !isExcludedContent) {
                 mediaCount++
             }
         }
         val prevCount = activeMediaPlaybackCount
         activeMediaPlaybackCount = mediaCount
-        if (mediaCount == 0 && broadcastMusicSessions.isNotEmpty()) {
+        if (mediaCount == 0 && (allBroadcastSessions.isNotEmpty() || broadcastMusicSessions.isNotEmpty())) {
             playbackWentIdleSinceBroadcast = true
         }
         val anyMediaPlaying = mediaCount > 0

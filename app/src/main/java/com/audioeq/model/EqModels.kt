@@ -93,18 +93,18 @@ enum class LegacyGlobalMixMode(
 ) {
     AUTO(
         id = "auto",
-        label = "Auto (Offload-Safe)",
-        subtitle = "Uses 5-Band Offload EQ + BassBoost on Global Mix when vendor/offload FX is present; 31-Band DP on player sessions"
+        label = "Auto (DP + Fallback)",
+        subtitle = "Uses 31-Band DynamicsProcessing on Global Mix & app sessions, falling back to 5-Band Native EQ if unavailable"
     ),
     OFFLOAD_EQ(
         id = "offload_eq",
         label = "Compatible 5-Band FX",
-        subtitle = "Forces native Equalizer + BassBoost + Virtualizer + LoudnessEnhancer on Global Mix session 0"
+        subtitle = "Prefers native Equalizer + BassBoost + Virtualizer + LoudnessEnhancer on Global Mix session 0"
     ),
     DYNAMICS_PROCESSING(
         id = "dynamics_processing",
         label = "31-Band DP",
-        subtitle = "Forces 31-Band DynamicsProcessing on Global Mix session 0 (may bypass compressed offload on some devices)"
+        subtitle = "Forces 31-Band DynamicsProcessing on Global Mix session 0 with automatic 5-Band fallback if blocked"
     );
 
     companion object {

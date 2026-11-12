@@ -52,7 +52,9 @@ data class DeviceDiagnostics(
     val endpointPeakQ8: Int = 240,
     val endpointVolmax: Int = 32,
     val systemEqConflictResolved: Boolean = false,
-    val vendorOffloadEqualizerDetected: Boolean = false
+    val vendorOffloadEqualizerDetected: Boolean = false,
+    val session0ControlActive: Boolean = false,
+    val legacyEngineSummary: String = "Initializing"
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
@@ -170,7 +172,7 @@ class AudioEngineController(
             val fallbackSids = if (isPrivilegedMode) {
                 MusicAppTracker.getVerifiedMusicSessionIds()
             } else {
-                emptyList()
+                MusicAppTracker.getAllBroadcastSessionIds()
             }
             masterEngine.syncDiscoveredSessions(fallbackSids)
             currentSampleRateHz = 48000
@@ -338,7 +340,9 @@ class AudioEngineController(
             endpointPeakQ8 = epSpec.peakQ8,
             endpointVolmax = epSpec.volmaxQ4,
             systemEqConflictResolved = systemEqResolved,
-            vendorOffloadEqualizerDetected = masterEngine.vendorOffloadEqualizerDetected
+            vendorOffloadEqualizerDetected = masterEngine.vendorOffloadEqualizerDetected,
+            session0ControlActive = masterEngine.hasSession0Control(),
+            legacyEngineSummary = masterEngine.getLegacyEngineSummary()
         )
         if (_diagnostics.value != newDiag) {
             _diagnostics.value = newDiag
