@@ -264,6 +264,9 @@ object ShizukuManager {
             com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, musicSessions)
             return musicSessions.map { it.sessionId }.distinct()
         }
+        if (ctx != null) {
+            com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, emptyList())
+        }
 
         val combined = (audioOutput.orEmpty() + "\n" + flingerOutput.orEmpty())
         if (combined.isBlank()) return emptyList()

@@ -13,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -71,6 +75,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -82,8 +87,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -96,15 +103,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import com.audioeq.BuildConfig
 import com.audioeq.audio.AutoEq
+import com.audioeq.audio.DeviceAppEntry
 import com.audioeq.audio.DeviceDiagnostics
 import com.audioeq.audio.Dsp
 import com.audioeq.audio.IndexEntry
+import com.audioeq.audio.MusicAppTracker
 import com.audioeq.data.GitHubUpdateState
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.HeadphoneProfile
+import com.audioeq.model.LegacyGlobalMixMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PersonalHearingCurve
 import com.audioeq.shizuku.ShizukuState
@@ -112,6 +123,8 @@ import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 import com.audioeq.ui.theme.MonetEngine
 import com.audioeq.ui.theme.SpaceGroteskFontFamily
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -1205,7 +1218,9 @@ fun SettingsAndDiagnosticsSheet(
     githubUpdateState: GitHubUpdateState = GitHubUpdateState.Idle,
     musicOnlyTrackingEnabled: Boolean = true,
     selectedMusicPackages: Set<String> = emptySet(),
+    legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
     onSelectMode: (EngineMode) -> Unit,
+    onSelectLegacyGlobalMixMode: (LegacyGlobalMixMode) -> Unit = {},
     onShizukuAction: () -> Unit,
     onToggleSplitLR: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
@@ -1215,6 +1230,7 @@ fun SettingsAndDiagnosticsSheet(
     onToggleMusicOnlyTracking: (Boolean) -> Unit = {},
     onToggleMusicPackage: (String) -> Unit = {},
     onAddCustomMusicPackage: (String) -> Unit = {},
+    onClearSelectedMusicPackages: () -> Unit = {},
     onOpenNotificationAccess: () -> Unit = {},
     onSelectThemeMode: (String) -> Unit,
     onSelectSeedHex: (String, Boolean) -> Unit,
@@ -1576,6 +1592,45 @@ fun SettingsAndDiagnosticsSheet(
             }
 
             SettingsGroupCard(title = "RENDERER & USB DAC") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Legacy Global Mix Engine",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = palette.onSurface
+                        )
+                        if (diagnostics.vendorOffloadEqualizerDetected) {
+                            Text(
+                                text = "Offload EQ detected",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 10.sp,
+                                color = palette.primary
+                            )
+                        }
+                    }
+                    Text(
+                        text = legacyGlobalMixMode.subtitle,
+                        fontSize = 12.sp,
+                        color = palette.onVar
+                    )
+                    V7SegmentedRow(
+                        options = LegacyGlobalMixMode.entries.map { it.id to it.label },
+                        selectedValue = legacyGlobalMixMode.id,
+                        enabled = true,
+                        onSelect = { selectedId ->
+                            onSelectLegacyGlobalMixMode(LegacyGlobalMixMode.fromId(selectedId))
+                        },
+                        modifier = Modifier.testTag("legacy_global_mix_mode")
+                    )
+                }
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
                 V7SwitchRow(
                     title = "Compatibility mode (10 bands)",
                     subtitle = "Use 10 pre-EQ bands instead of 31-band PCHIP",
@@ -1609,16 +1664,27 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            SettingsGroupCard(title = "MUSIC APPS SELECTION (EQ EFFECT WHITELIST)") {
+            SettingsGroupCard(title = "MUSIC APPS SELECTION (DEVICE APPS)") {
                 Text(
-                    text = "Equalizer and audio enhancers will strictly only affect audio from selected music apps. With any other apps (video players, games, browsers, social media, calls), no effect of the equalizer will affect their audio.",
+                    text = when {
+                        selectedMode == EngineMode.LEGACY ->
+                            "Legacy mode applies EQ universally to all apps (no Root/Shizuku session isolation). Select device apps below for ADB/Shizuku or Root mode."
+                        selectedMusicPackages.isEmpty() ->
+                            "Auto-detecting music & media players on this device. Other apps (browsers, games, calls) receive no effect. Tap apps below to restrict strictly to your chosen apps."
+                        else ->
+                            "Equalizer and enhancers strictly affect only the ${selectedMusicPackages.size} selected device app(s) below in Root/Shizuku mode. All other apps receive zero effect."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.onVar
                 )
 
                 V7SwitchRow(
-                    title = "Process selected music apps only",
-                    subtitle = "Bypasses all audio effects for non-music applications",
+                    title = "Process music apps only",
+                    subtitle = if (selectedMode == EngineMode.LEGACY) {
+                        "Universal apply active in Legacy mode; enforced in ADB/Shizuku & Root"
+                    } else {
+                        "Bypasses all audio effects for non-music or unselected apps"
+                    },
                     checked = musicOnlyTrackingEnabled,
                     enabled = true,
                     onCheckedChange = onToggleMusicOnlyTracking,
@@ -1627,98 +1693,170 @@ fun SettingsAndDiagnosticsSheet(
 
                 HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
-                Text(
-                    text = "Allowed Music Packages (${selectedMusicPackages.size} active):",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = palette.primary
-                )
+                var deviceApps by remember { mutableStateOf<List<DeviceAppEntry>>(emptyList()) }
+                var loadingDeviceApps by remember { mutableStateOf(true) }
+                var appSearchQuery by remember { mutableStateOf("") }
 
-                var customPackageInput by remember { mutableStateOf("") }
+                LaunchedEffect(Unit) {
+                    loadingDeviceApps = true
+                    deviceApps = withContext(Dispatchers.IO) {
+                        MusicAppTracker.loadDeviceAppList(context, selectedMusicPackages)
+                    }
+                    loadingDeviceApps = false
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = customPackageInput,
-                        onValueChange = { customPackageInput = it },
-                        label = { Text("Add Package Name") },
-                        placeholder = { Text("e.g., com.example.player") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("custom_package_input")
-                    )
-                    Button(
-                        onClick = {
-                            val trimmed = customPackageInput.trim().lowercase()
-                            if (trimmed.isNotEmpty()) {
-                                onAddCustomMusicPackage(trimmed)
-                                customPackageInput = ""
-                            }
+                    Text(
+                        text = if (selectedMusicPackages.isEmpty()) {
+                            "Mode: Auto-Detect All Media Apps"
+                        } else {
+                            "Selected Device Apps (${selectedMusicPackages.size})"
                         },
-                        enabled = customPackageInput.isNotBlank(),
-                        modifier = Modifier.testTag("add_custom_package_button")
-                    ) {
-                        Text("Add")
-                    }
-                }
-
-                val allDisplayPackages = remember(selectedMusicPackages) {
-                    val map = LinkedHashMap<String, String>()
-                    com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.forEach { (pkg, name) ->
-                        map[pkg] = name
-                    }
-                    selectedMusicPackages.forEach { pkg ->
-                        if (!map.containsKey(pkg)) {
-                            map[pkg] = pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (selectedMusicPackages.isNotEmpty()) {
+                        TextButton(
+                            onClick = onClearSelectedMusicPackages,
+                            modifier = Modifier.testTag("clear_selected_music_apps_button")
+                        ) {
+                            Text("Clear (${selectedMusicPackages.size})")
                         }
                     }
-                    map.entries.toList()
                 }
 
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    allDisplayPackages.forEach { (pkg, label) ->
-                        val isChecked = selectedMusicPackages.contains(pkg)
-                        Surface(
-                            onClick = { onToggleMusicPackage(pkg) },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isChecked) palette.primaryC.copy(alpha = 0.45f) else palette.sHigh,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("music_package_row_${pkg.hashCode()}")
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = palette.onSurface
-                                    )
-                                    Text(
-                                        text = pkg,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = palette.onVar,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                Switch(
-                                    checked = isChecked,
-                                    onCheckedChange = { onToggleMusicPackage(pkg) },
-                                    modifier = Modifier.testTag("package_switch_${pkg.hashCode()}")
+                OutlinedTextField(
+                    value = appSearchQuery,
+                    onValueChange = { appSearchQuery = it },
+                    placeholder = { Text("Search installed apps or package name") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search device apps"
+                        )
+                    },
+                    trailingIcon = {
+                        if (appSearchQuery.isNotEmpty()) {
+                            IconButton(onClick = { appSearchQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear search"
                                 )
                             }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("device_app_search_input")
+                )
+
+                val mergedApps = remember(deviceApps, selectedMusicPackages) {
+                    val existingPkgs = deviceApps.map { it.packageName }.toSet()
+                    val extraSelected = selectedMusicPackages
+                        .filter { it !in existingPkgs }
+                        .sorted()
+                        .map { pkg ->
+                            DeviceAppEntry(
+                                packageName = pkg,
+                                appLabel = pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() },
+                                isAudioOrMedia = true
+                            )
+                        }
+                    (extraSelected + deviceApps).sortedWith(
+                        compareByDescending<DeviceAppEntry> { selectedMusicPackages.contains(it.packageName) }
+                            .thenByDescending { it.isAudioOrMedia }
+                            .thenBy { it.appLabel.lowercase(Locale.US) }
+                    )
+                }
+
+                val filteredApps = remember(mergedApps, appSearchQuery) {
+                    val q = appSearchQuery.trim().lowercase(Locale.US)
+                    if (q.isEmpty()) {
+                        mergedApps
+                    } else {
+                        mergedApps.filter {
+                            it.appLabel.lowercase(Locale.US).contains(q) ||
+                                it.packageName.lowercase(Locale.US).contains(q)
+                        }
+                    }
+                }
+
+                if (loadingDeviceApps) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Loading installed apps on this device…",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                    }
+                } else if (filteredApps.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (appSearchQuery.isBlank()) {
+                                "No launcher or media apps visible to package queries."
+                            } else {
+                                "No installed app matched \"$appSearchQuery\"."
+                            },
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                        val trimmedPkg = appSearchQuery.trim().lowercase(Locale.US)
+                        if (trimmedPkg.contains('.') && !trimmedPkg.contains(' ')) {
+                            OutlinedButton(
+                                onClick = {
+                                    onAddCustomMusicPackage(trimmedPkg)
+                                    appSearchQuery = ""
+                                },
+                                modifier = Modifier.testTag("add_custom_package_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Add package",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Add \"$trimmedPkg\"")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(
+                            items = filteredApps,
+                            key = { it.packageName }
+                        ) { app ->
+                            val isChecked = selectedMusicPackages.contains(app.packageName)
+                            DeviceAppRow(
+                                app = app,
+                                isChecked = isChecked,
+                                onToggle = { onToggleMusicPackage(app.packageName) }
+                            )
                         }
                     }
                 }
@@ -1785,11 +1923,19 @@ fun SettingsAndDiagnosticsSheet(
                 DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
                 DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported (>234 Hz)" else "Not Supported")
                 DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")
+                DiagnosticRow("Vendor Offload EQ", if (diagnostics.vendorOffloadEqualizerDetected) "Detected (Offload-Safe Auto)" else "Not Detected")
                 DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Not Supported")
                 DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
                 DiagnosticRow("Shizuku Service", shizukuDiagLabel)
                 DiagnosticRow("Root su Binary", rootDiagLabel)
-                DiagnosticRow("Music-Only Tracking", if (musicOnlyTrackingEnabled) "Active (Music Players Only)" else "Disabled (All Apps)")
+                DiagnosticRow(
+                    "Music-Only Tracking",
+                    when {
+                        selectedMode == EngineMode.LEGACY -> "Universal (Legacy Mode)"
+                        musicOnlyTrackingEnabled -> "Strict (Selected/Music Apps Only)"
+                        else -> "Disabled (All Apps)"
+                    }
+                )
                 DiagnosticRow("Notification Media Access", if (diagnostics.notificationAccessGranted) "Granted" else "Not Granted")
                 DiagnosticRow("Tracked Music Players", diagnostics.trackedMusicSummary)
                 DiagnosticRow("Connected Device Key", deviceKeyLabel)
@@ -2567,6 +2713,117 @@ private fun DiagnosticRow(
         }
         if (showBottomBorder) {
             HorizontalDivider(color = palette.outlineV.copy(alpha = 0.4f))
+        }
+    }
+}
+
+@Composable
+private fun DeviceAppRow(
+    app: DeviceAppEntry,
+    isChecked: Boolean,
+    onToggle: () -> Unit
+) {
+    val context = LocalContext.current
+    val palette = LocalMonetPalette.current
+    var iconBitmap by remember(app.packageName) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(app.packageName) {
+        iconBitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                context.packageManager.getApplicationIcon(app.packageName)
+                    .toBitmap(width = 72, height = 72)
+                    .asImageBitmap()
+            }.getOrNull()
+        }
+    }
+
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isChecked) palette.primaryC.copy(alpha = 0.45f) else palette.sHigh,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("music_package_row_${app.packageName.hashCode()}")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val bmp = iconBitmap
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = "${app.appLabel} icon",
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(palette.sTop),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = palette.onVar,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 6.dp)
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = app.appLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (app.isAudioOrMedia) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(palette.primaryC)
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "Media",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 9.sp,
+                                color = palette.onPrimaryC
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = app.packageName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.onVar,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Switch(
+                checked = isChecked,
+                onCheckedChange = { onToggle() },
+                modifier = Modifier.testTag("package_switch_${app.packageName.hashCode()}")
+            )
         }
     }
 }

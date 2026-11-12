@@ -77,6 +77,14 @@ class EqRepository(context: Context) {
     )
     val usbBitPerfectEnabled: StateFlow<Boolean> = _usbBitPerfectEnabled.asStateFlow()
 
+    private val _legacyGlobalMixMode = MutableStateFlow(
+        com.audioeq.model.LegacyGlobalMixMode.fromId(
+            prefs.getString(KEY_LEGACY_GLOBAL_MIX_MODE, null)
+        )
+    )
+    val legacyGlobalMixMode: StateFlow<com.audioeq.model.LegacyGlobalMixMode> =
+        _legacyGlobalMixMode.asStateFlow()
+
     private val _themeMode = MutableStateFlow(
         prefs.getString(KEY_THEME_MODE, "light") ?: "light"
     )
@@ -120,10 +128,12 @@ class EqRepository(context: Context) {
         private const val KEY_ACTIVE_DEVICE_KEY = "active_device_key"
         private const val KEY_ROOT_WARNING_ACCEPTED = "root_warning_accepted"
         private const val KEY_SELECTED_MUSIC_PACKAGES = "selected_music_packages"
+        private const val KEY_SELECTED_APPS_V2_CLEAN = "selected_music_packages_v2_clean"
         private const val KEY_EXCLUDED_MUSIC_PACKAGES = "excluded_music_packages"
         private const val KEY_COMPAT_10_BAND = "compat_10_band"
         private const val KEY_TRANSIENT_MODE = "transient_mode"
         private const val KEY_USB_BIT_PERFECT = "usb_bit_perfect"
+        private const val KEY_LEGACY_GLOBAL_MIX_MODE = "legacy_global_mix_mode"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SEED_HEX = "seed_hex_v2"
         private const val KEY_WALLPAPER_EXTRACT = "wallpaper_extract"
@@ -178,8 +188,17 @@ class EqRepository(context: Context) {
 
     fun setSelectedMusicPackages(pkgs: Set<String>) {
         _selectedMusicPackages.value = pkgs
-        prefs.edit().putStringSet(KEY_SELECTED_MUSIC_PACKAGES, pkgs).apply()
+        prefs.edit()
+            .putBoolean(KEY_SELECTED_APPS_V2_CLEAN, true)
+            .putStringSet(KEY_SELECTED_MUSIC_PACKAGES, pkgs)
+            .apply()
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(pkgs)
+    }
+
+    fun clearSelectedMusicPackages() {
+        prefs.edit().putStringSet(KEY_EXCLUDED_MUSIC_PACKAGES, emptySet()).apply()
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
+        setSelectedMusicPackages(emptySet())
     }
 
     fun toggleMusicPackage(pkg: String) {
@@ -202,15 +221,16 @@ class EqRepository(context: Context) {
     }
 
     private fun loadSelectedMusicPackages(): Set<String> {
-        val excluded = loadExcludedMusicPackages()
-        val popular = com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.map { it.first }
-            .filter { it !in excluded }
-            .toSet()
-        val stored = prefs.getStringSet(KEY_SELECTED_MUSIC_PACKAGES, null)
-        if (stored != null) {
-            return (stored + popular) - excluded
+        if (!prefs.getBoolean(KEY_SELECTED_APPS_V2_CLEAN, false)) {
+            prefs.edit()
+                .putBoolean(KEY_SELECTED_APPS_V2_CLEAN, true)
+                .putStringSet(KEY_SELECTED_MUSIC_PACKAGES, emptySet())
+                .apply()
+            return emptySet()
         }
-        return popular
+        val excluded = loadExcludedMusicPackages()
+        val stored = prefs.getStringSet(KEY_SELECTED_MUSIC_PACKAGES, null)?.toSet() ?: emptySet()
+        return stored - excluded
     }
 
     fun setCompatibility10Band(enabled: Boolean) {
@@ -226,6 +246,11 @@ class EqRepository(context: Context) {
     fun setUsbBitPerfectEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_USB_BIT_PERFECT, enabled).apply()
         _usbBitPerfectEnabled.value = enabled
+    }
+
+    fun setLegacyGlobalMixMode(mode: com.audioeq.model.LegacyGlobalMixMode) {
+        prefs.edit().putString(KEY_LEGACY_GLOBAL_MIX_MODE, mode.id).apply()
+        _legacyGlobalMixMode.value = mode
     }
 
     fun setThemeMode(mode: String) {

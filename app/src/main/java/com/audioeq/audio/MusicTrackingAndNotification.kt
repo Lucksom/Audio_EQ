@@ -42,6 +42,12 @@ data class TrackedMusicSession(
     val source: String
 )
 
+data class DeviceAppEntry(
+    val packageName: String,
+    val appLabel: String,
+    val isAudioOrMedia: Boolean
+)
+
 object MusicAppTracker {
 
     private val KNOWN_MUSIC_PACKAGES = setOf(
@@ -155,14 +161,52 @@ object MusicAppTracker {
 
     fun setSelectedMusicPackages(pkgs: Set<String>) {
         _selectedMusicPackages.value = pkgs
+        pruneDisallowedSessions()
+        lastAppContext?.let { rebuildSummary(it) }
     }
 
     fun setExcludedMusicPackages(pkgs: Set<String>) {
         _excludedMusicPackages.value = pkgs
+        pruneDisallowedSessions()
+        lastAppContext?.let { rebuildSummary(it) }
+    }
+
+    private fun isPackageCurrentlyAllowed(pkg: String): Boolean {
+        if (pkg in EXCLUDED_NON_MUSIC_PACKAGES) return false
+        val selected = _selectedMusicPackages.value
+        if (selected.isNotEmpty()) return pkg in selected
+        return pkg !in _excludedMusicPackages.value
+    }
+
+    private fun pruneDisallowedSessions() {
+        broadcastMusicSessions.entries.removeIf { !isPackageCurrentlyAllowed(it.value.packageName) }
+        privilegedMusicSessions.entries.removeIf { !isPackageCurrentlyAllowed(it.value.packageName) }
     }
 
     private val broadcastMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
     private val privilegedMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
+
+    @Volatile
+    private var lastAppContext: Context? = null
+
+    @Volatile
+    private var privilegedModeActive: Boolean = false
+
+    @Volatile
+    private var legacyUniversalActive: Boolean = true
+
+    fun setEngineTrackingContext(context: Context, isLegacyMode: Boolean, hasPrivilegedControl: Boolean) {
+        lastAppContext = context.applicationContext
+        val changed = (legacyUniversalActive != isLegacyMode) || (privilegedModeActive != hasPrivilegedControl)
+        legacyUniversalActive = isLegacyMode
+        privilegedModeActive = hasPrivilegedControl
+        if (isLegacyMode) {
+            privilegedMusicSessions.clear()
+        }
+        if (changed) {
+            rebuildSummary(context)
+        }
+    }
 
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
@@ -176,11 +220,14 @@ object MusicAppTracker {
     private val _activeMusicPlaying = MutableStateFlow(false)
     val activeMusicPlaying: StateFlow<Boolean> = _activeMusicPlaying.asStateFlow()
 
-    private val _trackedSessionsSummary = MutableStateFlow("Monitoring music players")
+    private val _trackedSessionsSummary = MutableStateFlow("Universal (All Audio)")
     val trackedSessionsSummary: StateFlow<String> = _trackedSessionsSummary.asStateFlow()
 
     @Volatile
     private var activeMediaPlaybackCount: Int = 0
+
+    @Volatile
+    private var playbackWentIdleSinceBroadcast: Boolean = false
 
     @Volatile
     private var onMusicStateChanged: (() -> Unit)? = null
@@ -232,9 +279,12 @@ object MusicAppTracker {
         val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         if (pkg == context.packageName || pkg.startsWith("com.audioeq")) return false
         if (pkg in EXCLUDED_NON_MUSIC_PACKAGES) return false
-        if (pkg in _excludedMusicPackages.value) return false
 
-        if (pkg in _selectedMusicPackages.value) return true
+        val selected = _selectedMusicPackages.value
+        if (selected.isNotEmpty()) {
+            return pkg in selected
+        }
+        if (pkg in _excludedMusicPackages.value) return false
 
         val lower = pkg.lowercase(Locale.US)
         if (lower.contains("telecom") || lower.contains("dialer") || lower.contains("inputmethod") ||
@@ -248,7 +298,7 @@ object MusicAppTracker {
         if (lower.contains("music") || lower.contains("audioplayer") || lower.contains("mediaplayer") ||
             lower.contains("spotify") || lower.contains("podcast") || lower.contains("mp3") ||
             lower.contains("equalizer") || lower.contains("radio") || lower.contains("flac") ||
-            lower.contains("player")
+            lower.contains("player") || lower.contains("youtube")
         ) {
             return true
         }
@@ -256,7 +306,9 @@ object MusicAppTracker {
             val pm = context.packageManager
             val appInfo = pm.getApplicationInfo(pkg, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (appInfo.category == ApplicationInfo.CATEGORY_AUDIO) {
+                if (appInfo.category == ApplicationInfo.CATEGORY_AUDIO ||
+                    appInfo.category == ApplicationInfo.CATEGORY_VIDEO
+                ) {
                     return true
                 }
                 if (appInfo.category == ApplicationInfo.CATEGORY_GAME ||
@@ -269,6 +321,71 @@ object MusicAppTracker {
         } catch (_: Throwable) {
         }
         return contentType == AudioEffect.CONTENT_TYPE_MUSIC
+    }
+
+    fun loadDeviceAppList(
+        context: Context,
+        selectedPackages: Set<String> = _selectedMusicPackages.value
+    ): List<DeviceAppEntry> {
+        val pm = context.packageManager
+        val discovered = LinkedHashMap<String, DeviceAppEntry>()
+
+        fun addApp(pkg: String?, mediaHint: Boolean) {
+            val cleaned = pkg?.trim()?.takeIf { it.isNotEmpty() } ?: return
+            if (cleaned == context.packageName || cleaned.startsWith("com.audioeq")) return
+            val existing = discovered[cleaned]
+            if (existing != null) {
+                if (mediaHint && !existing.isAudioOrMedia) {
+                    discovered[cleaned] = existing.copy(isAudioOrMedia = true)
+                }
+                return
+            }
+            val label = resolveAppLabel(context, cleaned)
+            val isMediaCat = mediaHint || cleaned in KNOWN_MUSIC_PACKAGES || run {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    runCatching {
+                        val cat = pm.getApplicationInfo(cleaned, 0).category
+                        cat == ApplicationInfo.CATEGORY_AUDIO || cat == ApplicationInfo.CATEGORY_VIDEO
+                    }.getOrDefault(false)
+                } else {
+                    false
+                }
+            }
+            discovered[cleaned] = DeviceAppEntry(
+                packageName = cleaned,
+                appLabel = label,
+                isAudioOrMedia = isMediaCat
+            )
+        }
+
+        val queries = listOf(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MUSIC) to true,
+            Intent("android.media.browse.MediaBrowserService") to true,
+            Intent(Intent.ACTION_VIEW).setType("audio/*") to true,
+            Intent(Intent.ACTION_VIEW).setType("video/*") to true,
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER) to false
+        )
+        for ((intent, mediaHint) in queries) {
+            runCatching {
+                val resolved = pm.queryIntentActivities(intent, 0)
+                for (ri in resolved) {
+                    addApp(ri.activityInfo?.packageName, mediaHint)
+                }
+                if (intent.action == "android.media.browse.MediaBrowserService") {
+                    val services = pm.queryIntentServices(intent, 0)
+                    for (si in services) {
+                        addApp(si.serviceInfo?.packageName, true)
+                    }
+                }
+            }
+        }
+        selectedPackages.forEach { addApp(it, true) }
+
+        return discovered.values.sortedWith(
+            compareByDescending<DeviceAppEntry> { it.packageName in selectedPackages }
+                .thenByDescending { it.isAudioOrMedia }
+                .thenBy { it.appLabel.lowercase(Locale.US) }
+        )
     }
 
     fun resolveAppLabel(context: Context, packageName: String): String {
@@ -292,6 +409,7 @@ object MusicAppTracker {
         if (!isMusicAppPackage(context, packageName, contentType)) {
             return false
         }
+        playbackWentIdleSinceBroadcast = false
         val pkg = packageName?.takeIf { it.isNotBlank() } ?: "music.player"
         val label = resolveAppLabel(context, pkg)
         broadcastMusicSessions[sessionId] = TrackedMusicSession(
@@ -311,12 +429,14 @@ object MusicAppTracker {
     }
 
     fun updatePrivilegedMusicSessions(context: Context, sessions: List<TrackedMusicSession>) {
-        if (privilegedMusicSessions.isEmpty() && sessions.isEmpty()) return
+        lastAppContext = context.applicationContext
+        val allowedSessions = sessions.filter { it.sessionId > 0 && isPackageCurrentlyAllowed(it.packageName) }
+        val sameKeys = privilegedMusicSessions.size == allowedSessions.size &&
+            allowedSessions.all { privilegedMusicSessions[it.sessionId] == it }
+        if (sameKeys) return
         privilegedMusicSessions.clear()
-        for (s in sessions) {
-            if (s.sessionId > 0) {
-                privilegedMusicSessions[s.sessionId] = s
-            }
+        for (s in allowedSessions) {
+            privilegedMusicSessions[s.sessionId] = s
         }
         rebuildSummary(context)
     }
@@ -325,12 +445,13 @@ object MusicAppTracker {
 
     fun hasActiveNonSessionMediaPlayback(): Boolean {
         val activePkgs = _activeMediaPackages.value
-        if (activePkgs.isEmpty()) {
-            return activeMediaPlaybackCount > broadcastMusicSessions.size
-        }
         val broadcastPkgs = broadcastMusicSessions.values.map { it.packageName }.toSet()
-        return activePkgs.any { it !in broadcastPkgs } ||
-            activeMediaPlaybackCount > broadcastMusicSessions.size
+        if (activePkgs.isNotEmpty()) {
+            return activePkgs.any { it !in broadcastPkgs } ||
+                activeMediaPlaybackCount > broadcastMusicSessions.size
+        }
+        return activeMediaPlaybackCount > broadcastMusicSessions.size ||
+            (activeMediaPlaybackCount > 0 && playbackWentIdleSinceBroadcast)
     }
 
     fun updateNotificationMediaPackages(
@@ -369,6 +490,9 @@ object MusicAppTracker {
         }
         val prevCount = activeMediaPlaybackCount
         activeMediaPlaybackCount = mediaCount
+        if (mediaCount == 0 && broadcastMusicSessions.isNotEmpty()) {
+            playbackWentIdleSinceBroadcast = true
+        }
         val anyMediaPlaying = mediaCount > 0
         val combinedPlaying = anyMediaPlaying || _activeMediaPackages.value.isNotEmpty()
         if (_activeMusicPlaying.value != combinedPlaying || prevCount != mediaCount) {
@@ -380,15 +504,47 @@ object MusicAppTracker {
 
     fun getVerifiedMusicSessionIds(): Set<Int> {
         val result = LinkedHashSet<Int>()
-        result.addAll(broadcastMusicSessions.keys)
-        result.addAll(privilegedMusicSessions.keys)
+        if (privilegedModeActive) {
+            for ((sid, session) in privilegedMusicSessions) {
+                if (isPackageCurrentlyAllowed(session.packageName)) {
+                    result.add(sid)
+                }
+            }
+            return result
+        }
+        for ((sid, session) in broadcastMusicSessions) {
+            if (isPackageCurrentlyAllowed(session.packageName)) {
+                result.add(sid)
+            }
+        }
+        for ((sid, session) in privilegedMusicSessions) {
+            if (isPackageCurrentlyAllowed(session.packageName)) {
+                result.add(sid)
+            }
+        }
         return result
     }
 
     fun getAllTrackedSessions(): List<TrackedMusicSession> {
         val merged = LinkedHashMap<Int, TrackedMusicSession>()
-        for ((sid, s) in broadcastMusicSessions) merged[sid] = s
-        for ((sid, s) in privilegedMusicSessions) merged[sid] = s
+        if (privilegedModeActive) {
+            for ((sid, s) in privilegedMusicSessions) {
+                if (isPackageCurrentlyAllowed(s.packageName)) {
+                    merged[sid] = s
+                }
+            }
+        } else {
+            for ((sid, s) in broadcastMusicSessions) {
+                if (isPackageCurrentlyAllowed(s.packageName)) {
+                    merged[sid] = s
+                }
+            }
+            for ((sid, s) in privilegedMusicSessions) {
+                if (isPackageCurrentlyAllowed(s.packageName)) {
+                    merged[sid] = s
+                }
+            }
+        }
         return merged.values.sortedBy { it.sessionId }
     }
 
@@ -399,15 +555,33 @@ object MusicAppTracker {
     ): List<TrackedMusicSession> {
         val results = LinkedHashMap<Int, TrackedMusicSession>()
         val pm = context.packageManager
+        val pidToUid = HashMap<Int, Int>()
 
         if (!audioDumpsys.isNullOrBlank()) {
             val lines = audioDumpsys.lineSequence()
             for (line in lines) {
+                val lowerLine = line.lowercase(Locale.US)
+                if (lowerLine.contains("audio event log")) {
+                    // Stop before historical playback event log entries so closed/old apps don't linger
+                    break
+                }
+                val uPidPair = Regex("""u/pid\s*[:=]\s*(\d+)\s*/\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
+                if (uPidPair != null) {
+                    val u = uPidPair.groupValues[1].toIntOrNull()
+                    val p = uPidPair.groupValues[2].toIntOrNull()
+                    if (u != null && p != null && u >= 10000) {
+                        pidToUid[p] = u
+                    }
+                }
                 if (!line.contains("sessionId", ignoreCase = true) && !line.contains("session:", ignoreCase = true)) {
                     continue
                 }
-                val lowerLine = line.lowercase(Locale.US)
-                if (lowerLine.contains("state:released") || lowerLine.contains("state:stopped") || lowerLine.contains("state:idle")) {
+                if (lowerLine.contains("state:released") ||
+                    lowerLine.contains("state:stopped") ||
+                    lowerLine.contains("state:idle") ||
+                    lowerLine.contains("state:paused") ||
+                    lowerLine.contains("state:unknown")
+                ) {
                     continue
                 }
                 if (lowerLine.contains("usage=") &&
@@ -451,16 +625,39 @@ object MusicAppTracker {
         }
 
         if (!flingerDumpsys.isNullOrBlank()) {
+            var inEffectsBlock = false
             val lines = flingerDumpsys.lineSequence()
             for (line in lines) {
+                val lowerLine = line.lowercase(Locale.US)
+                if (lowerLine.contains("effect chain") || lowerLine.trimStart().startsWith("effect id")) {
+                    inEffectsBlock = true
+                    continue
+                }
+                if (lowerLine.contains("tracks of which") || lowerLine.contains("output thread")) {
+                    inEffectsBlock = false
+                    continue
+                }
+                if (inEffectsBlock) continue
+                // Skip inactive track rows in AudioFlinger table dumps
+                if (Regex("""\s+no\s+\d+""", RegexOption.IGNORE_CASE).containsMatchIn(line)) {
+                    continue
+                }
                 val sidMatch = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
                 if (sidMatch != null) {
                     val sid = sidMatch.groupValues[1].toIntOrNull() ?: continue
                     if (sid <= 0 || results.containsKey(sid)) continue
-                    val uidMatch = Regex("""(?:uid|client)\s*[:=]?\s*(\d{5,})""", RegexOption.IGNORE_CASE).find(line)
-                    val uid = uidMatch?.groupValues?.get(1)?.toIntOrNull()
-                    if (uid != null && uid >= 10000) {
-                        val pkgs = runCatching { pm.getPackagesForUid(uid)?.toList() ?: emptyList() }.getOrDefault(emptyList())
+                    val uidMatch = Regex("""\buid\s*[:=]?\s*(\d{5,})""", RegexOption.IGNORE_CASE).find(line)
+                    val clientMatch = Regex("""\bclient\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
+                    val directUid = uidMatch?.groupValues?.get(1)?.toIntOrNull()
+                    val clientId = clientMatch?.groupValues?.get(1)?.toIntOrNull()
+                    val resolvedUid = when {
+                        directUid != null && directUid >= 10000 -> directUid
+                        clientId != null && pidToUid.containsKey(clientId) -> pidToUid[clientId]
+                        clientId != null && clientId >= 10000 -> clientId
+                        else -> null
+                    }
+                    if (resolvedUid != null && resolvedUid >= 10000) {
+                        val pkgs = runCatching { pm.getPackagesForUid(resolvedUid)?.toList() ?: emptyList() }.getOrDefault(emptyList())
                         val matchedPkg = pkgs.firstOrNull { isMusicAppPackage(context, it, AudioEffect.CONTENT_TYPE_MUSIC) }
                         if (matchedPkg != null) {
                             results[sid] = TrackedMusicSession(
@@ -470,14 +667,6 @@ object MusicAppTracker {
                                 source = "AudioFlinger"
                             )
                         }
-                    } else if (_activeMediaPackages.value.isNotEmpty()) {
-                        val firstMediaPkg = _activeMediaPackages.value.first()
-                        results[sid] = TrackedMusicSession(
-                            sessionId = sid,
-                            packageName = firstMediaPkg,
-                            appLabel = resolveAppLabel(context, firstMediaPkg),
-                            source = "Notif+Flinger"
-                        )
                     }
                 }
             }
@@ -487,22 +676,24 @@ object MusicAppTracker {
     }
 
     private fun rebuildSummary(context: Context) {
+        lastAppContext = context.applicationContext
         isNotificationListenerEnabled(context)
+        if (legacyUniversalActive) {
+            _trackedSessionsSummary.value = "Universal (All Audio)"
+            return
+        }
         val tracked = getAllTrackedSessions()
-        val mediaLabels = _activeMediaLabels.value
-        _trackedSessionsSummary.value = when {
-            tracked.isNotEmpty() -> {
-                tracked.joinToString(", ") { "${it.appLabel} (#${it.sessionId})" }
+        _trackedSessionsSummary.value = if (tracked.isNotEmpty()) {
+            val byApp = LinkedHashMap<String, MutableList<Int>>()
+            for (s in tracked) {
+                byApp.getOrPut(s.appLabel) { mutableListOf() }.add(s.sessionId)
             }
-            mediaLabels.isNotEmpty() -> {
-                "${mediaLabels.joinToString(", ")} (Notification tracked)"
+            byApp.entries.joinToString(", ") { (label, sids) ->
+                val sidList = sids.distinct().joinToString(", ") { "#$it" }
+                "$label ($sidList)"
             }
-            _activeMusicPlaying.value -> {
-                "Music stream active"
-            }
-            else -> {
-                "Idle · Waiting for music player"
-            }
+        } else {
+            "No active music session"
         }
     }
 }

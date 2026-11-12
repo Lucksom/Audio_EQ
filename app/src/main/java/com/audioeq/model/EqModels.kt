@@ -86,6 +86,32 @@ enum class OperatingMode(val badge: String) {
     SUSPENDED_PRIVILEGED("Standard Engine · Awaiting Privilege")
 }
 
+enum class LegacyGlobalMixMode(
+    val id: String,
+    val label: String,
+    val subtitle: String
+) {
+    AUTO(
+        id = "auto",
+        label = "Auto (Offload-Safe)",
+        subtitle = "Uses 5-Band Offload EQ + BassBoost on Global Mix when vendor/offload FX is present; 31-Band DP on player sessions"
+    ),
+    OFFLOAD_EQ(
+        id = "offload_eq",
+        label = "Compatible 5-Band FX",
+        subtitle = "Forces native Equalizer + BassBoost + Virtualizer + LoudnessEnhancer on Global Mix session 0"
+    ),
+    DYNAMICS_PROCESSING(
+        id = "dynamics_processing",
+        label = "31-Band DP",
+        subtitle = "Forces 31-Band DynamicsProcessing on Global Mix session 0 (may bypass compressed offload on some devices)"
+    );
+
+    companion object {
+        fun fromId(id: String?): LegacyGlobalMixMode = entries.find { it.id == id } ?: AUTO
+    }
+}
+
 enum class OutputRoute(
     val id: String,
     val label: String,

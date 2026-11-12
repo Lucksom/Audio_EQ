@@ -99,11 +99,11 @@ class AudioEqRobolectricTest {
     }
 
     @Test
-    fun `verify MusicAppTracker accepts music and media apps even when popular list is preloaded`() {
+    fun `verify MusicAppTracker auto-detects when empty and strictly filters when device apps are selected`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(
-            setOf("com.spotify.music", "com.google.android.apps.youtube.music")
-        )
+        // 1. Empty selection -> auto-detect music & media players on the device
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
         assertTrue(
             com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
                 context,
@@ -125,10 +125,33 @@ class AudioEqRobolectricTest {
                 android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
             )
         )
-        // Explicitly excluded popular package should be rejected; cleared exclusion re-enables it
-        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(
-            setOf("com.google.android.apps.youtube.music")
+        org.junit.Assert.assertFalse(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.whatsapp",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
         )
+
+        // 2. Non-empty device app selection -> strict whitelist
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(setOf("com.spotify.music"))
+        assertTrue(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.spotify.music",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+        org.junit.Assert.assertFalse(
+            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
+                context,
+                "com.miui.player",
+                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+            )
+        )
+
+        // 3. Clearing returns to auto-detect, still respecting explicit exclusions
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
         com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(setOf("com.spotify.music"))
         org.junit.Assert.assertFalse(
             com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
@@ -138,12 +161,60 @@ class AudioEqRobolectricTest {
             )
         )
         com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
-        org.junit.Assert.assertFalse(
-            com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
-                context,
-                "com.whatsapp",
-                android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
-            )
+    }
+
+    @Test
+    fun `verify loadDeviceAppList returns device entries without throwing`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val entries = com.audioeq.audio.MusicAppTracker.loadDeviceAppList(
+            context = context,
+            selectedPackages = setOf("com.spotify.music")
         )
+        assertTrue(entries.any { it.packageName == "com.spotify.music" })
+    }
+
+    @Test
+    fun `verify dumpsys parsing excludes historical log paused and unselected sessions and formats notification summary`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(setOf("com.spotify.music"))
+        com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = false,
+            hasPrivilegedControl = true
+        )
+
+        val audioDumpsys = """
+            players:
+              ID:11 -- type:android.media.AudioTrack -- u/pid:10200/1111 -- state:started -- attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC -- pkg:com.spotify.music -- sessionId:42
+              ID:12 -- type:android.media.AudioTrack -- u/pid:10201/2222 -- state:paused -- attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC -- pkg:com.spotify.music -- sessionId:43
+              ID:13 -- type:android.media.AudioTrack -- u/pid:10202/3333 -- state:started -- attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MOVIE -- pkg:com.android.chrome -- sessionId:99
+            Audio event log: playback activity as reported through PlayerBase
+              11-12 10:00:00:000 player piid:99 u/pid:10200/1111 state:started pkg:com.spotify.music sessionId:77
+        """.trimIndent()
+
+        val sessions = com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
+            context = context,
+            audioDumpsys = audioDumpsys,
+            flingerDumpsys = null
+        )
+        assertEquals(listOf(42), sessions.map { it.sessionId })
+
+        com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(context, sessions)
+        val summary = com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value
+        assertTrue(summary.contains("42"))
+        org.junit.Assert.assertFalse(summary.contains("43"))
+        org.junit.Assert.assertFalse(summary.contains("77"))
+        org.junit.Assert.assertFalse(summary.contains("99"))
+
+        com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
+        assertEquals("No active music session", com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value)
+
+        com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = true,
+            hasPrivilegedControl = false
+        )
+        assertEquals("Universal (All Audio)", com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value)
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
     }
 }

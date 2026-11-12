@@ -368,4 +368,19 @@ class AudioEqUnitTest {
             com.audioeq.model.OperatingMode.SUSPENDED_PRIVILEGED.badge.contains("Grant", ignoreCase = true)
         )
     }
+
+    @Test
+    fun verifyLegacyGlobalMixModeIdRoundTrip() {
+        for (mode in com.audioeq.model.LegacyGlobalMixMode.entries) {
+            assertEquals(mode, com.audioeq.model.LegacyGlobalMixMode.fromId(mode.id))
+        }
+        assertEquals(
+            com.audioeq.model.LegacyGlobalMixMode.AUTO,
+            com.audioeq.model.LegacyGlobalMixMode.fromId("unknown_mode")
+        )
+        assertEquals(
+            com.audioeq.model.LegacyGlobalMixMode.AUTO,
+            com.audioeq.model.LegacyGlobalMixMode.fromId(null)
+        )
+    }
 }

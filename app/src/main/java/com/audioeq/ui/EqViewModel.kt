@@ -29,6 +29,7 @@ import com.audioeq.model.EqBand
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqPreset
 import com.audioeq.model.HeadphoneProfile
+import com.audioeq.model.LegacyGlobalMixMode
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PersonalHearingCurve
@@ -105,6 +106,7 @@ data class EqUiState(
     val usbBitPerfectEnabled: Boolean = false,
     val musicOnlyTrackingEnabled: Boolean = true,
     val selectedMusicPackages: Set<String> = emptySet(),
+    val legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
     val themeMode: String = "light",
     val seedHex: String = "#006A6A",
     val isSeedFromWallpaper: Boolean = false,
@@ -266,9 +268,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.selectedMusicPackages,
         repository.compatibility10Band,
         repository.transientMode,
-        repository.usbBitPerfectEnabled
-    ) { pkgs, compat10, trans, usb ->
-        Intermediate3A(pkgs, compat10, trans, usb)
+        repository.usbBitPerfectEnabled,
+        repository.legacyGlobalMixMode
+    ) { pkgs, compat10, trans, usb, legacyMix ->
+        Intermediate3A(pkgs, compat10, trans, usb, legacyMix)
     }
 
     private val flow3B = combine(
@@ -286,6 +289,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             compatibility10Band = a.compatibility10Band,
             transientMode = a.transientMode,
             usbBitPerfectEnabled = a.usbBitPerfectEnabled,
+            legacyGlobalMixMode = a.legacyGlobalMixMode,
             musicOnlyTrackingEnabled = b.musicOnlyTrackingEnabled,
             themeMode = b.themeMode,
             seedHex = b.seedHex,
@@ -507,6 +511,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             usbBitPerfectEnabled = p3.usbBitPerfectEnabled,
             musicOnlyTrackingEnabled = p3.musicOnlyTrackingEnabled,
             selectedMusicPackages = p3.selectedMusicPackages,
+            legacyGlobalMixMode = p3.legacyGlobalMixMode,
             themeMode = p3.themeMode,
             seedHex = p3.seedHex,
             isSeedFromWallpaper = p3.isSeedFromWallpaper,
@@ -627,7 +632,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     transientMode = state.transientMode,
                     usbBitPerfectEnabled = state.usbBitPerfectEnabled,
                     activeRoute = state.activeRoute,
-                    musicOnlyTracking = state.musicOnlyTrackingEnabled
+                    musicOnlyTracking = state.musicOnlyTrackingEnabled,
+                    legacyGlobalMixMode = state.legacyGlobalMixMode
                 )
                 EqualizerNotificationHelper.updateOrCancelPersistentNotification(
                     context = getApplication(),
@@ -636,10 +642,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     profileTitle = "",
                     routeLabel = state.activeRoute.label,
                     engineShortTitle = state.engineMode.shortTitle,
-                    musicSummary = if (state.musicOnlyTrackingEnabled) {
-                        state.diagnostics.trackedMusicSummary
-                    } else {
-                        "All Audio Sessions"
+                    musicSummary = when {
+                        state.engineMode == EngineMode.LEGACY -> "Universal (All Audio)"
+                        state.musicOnlyTrackingEnabled -> state.diagnostics.trackedMusicSummary
+                        else -> "All Audio Sessions"
                     }
                 )
             }
@@ -1405,6 +1411,16 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun clearSelectedMusicPackages() {
+        repository.clearSelectedMusicPackages()
+        engineController.triggerImmediateSessionSync()
+        _statusBanner.value = "Music filter cleared — auto-detecting all media players"
+    }
+
+    fun setLegacyGlobalMixMode(mode: LegacyGlobalMixMode) {
+        repository.setLegacyGlobalMixMode(mode)
+    }
+
     fun setCompatibility10Band(enabled: Boolean) {
         repository.setCompatibility10Band(enabled)
     }
@@ -1437,10 +1453,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             profileTitle = "",
             routeLabel = s.activeRoute.label,
             engineShortTitle = s.engineMode.shortTitle,
-            musicSummary = if (s.musicOnlyTrackingEnabled) {
-                s.diagnostics.trackedMusicSummary
-            } else {
-                "All Audio Sessions"
+            musicSummary = when {
+                s.engineMode == EngineMode.LEGACY -> "Universal (All Audio)"
+                s.musicOnlyTrackingEnabled -> s.diagnostics.trackedMusicSummary
+                else -> "All Audio Sessions"
             }
         )
     }
@@ -1611,7 +1627,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val selectedMusicPackages: Set<String>,
         val compatibility10Band: Boolean,
         val transientMode: Boolean,
-        val usbBitPerfectEnabled: Boolean
+        val usbBitPerfectEnabled: Boolean,
+        val legacyGlobalMixMode: LegacyGlobalMixMode
     )
 
     private data class Intermediate3B(
@@ -1687,6 +1704,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val compatibility10Band: Boolean,
         val transientMode: Boolean,
         val usbBitPerfectEnabled: Boolean,
+        val legacyGlobalMixMode: LegacyGlobalMixMode,
         val musicOnlyTrackingEnabled: Boolean,
         val themeMode: String,
         val seedHex: String,

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.audioeq.model.EngineMode
 import com.audioeq.model.HeadphoneProfile
+import com.audioeq.model.LegacyGlobalMixMode
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PersonalHearingCurve
@@ -50,7 +51,8 @@ data class DeviceDiagnostics(
     val hardwareSampleRateHz: Int = 48000,
     val endpointPeakQ8: Int = 240,
     val endpointVolmax: Int = 32,
-    val systemEqConflictResolved: Boolean = false
+    val systemEqConflictResolved: Boolean = false,
+    val vendorOffloadEqualizerDetected: Boolean = false
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
@@ -143,6 +145,11 @@ class AudioEngineController(
         val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
         val privilegeReady = isPrivilegeReadyForMode(mode)
         masterEngine.setEngineMode(mode, privilegeReady)
+        MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = mode == EngineMode.LEGACY,
+            hasPrivilegedControl = isPrivilegedMode && privilegeReady
+        )
 
         if (isPrivilegedMode && privilegeReady) {
             val sessions = shizukuManager.discoverAudioFlingerSessions(
@@ -160,12 +167,12 @@ class AudioEngineController(
             }
         } else {
             MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
-            val legacySids = if (isPrivilegedMode) {
+            val fallbackSids = if (isPrivilegedMode) {
                 MusicAppTracker.getVerifiedMusicSessionIds()
             } else {
-                MusicAppTracker.getBroadcastSessionIds()
+                emptyList()
             }
-            masterEngine.syncDiscoveredSessions(legacySids)
+            masterEngine.syncDiscoveredSessions(fallbackSids)
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         }
@@ -228,7 +235,8 @@ class AudioEngineController(
         usbBitPerfectEnabled: Boolean = false,
         abxBypassCurve: Boolean = false,
         activeRoute: OutputRoute = currentRoute,
-        musicOnlyTracking: Boolean = true
+        musicOnlyTracking: Boolean = true,
+        legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO
     ) {
         val prevMode = currentEngineMode
         val prevMusicOnly = latestRenderParams.musicOnlyTracking
@@ -280,7 +288,8 @@ class AudioEngineController(
             usbBitPerfectEnabled = usbBitPerfectEnabled,
             abxBypassCurve = abxBypassCurve,
             musicOnlyTracking = musicOnlyTracking,
-            hardwareSampleRateHz = currentSampleRateHz
+            hardwareSampleRateHz = currentSampleRateHz,
+            legacyGlobalMixMode = legacyGlobalMixMode
         )
         latestRenderParams = params
         masterEngine.updateParams(params)
@@ -328,7 +337,8 @@ class AudioEngineController(
             hardwareSampleRateHz = currentSampleRateHz,
             endpointPeakQ8 = epSpec.peakQ8,
             endpointVolmax = epSpec.volmaxQ4,
-            systemEqConflictResolved = systemEqResolved
+            systemEqConflictResolved = systemEqResolved,
+            vendorOffloadEqualizerDetected = masterEngine.vendorOffloadEqualizerDetected
         )
         if (_diagnostics.value != newDiag) {
             _diagnostics.value = newDiag
