@@ -47,24 +47,25 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import com.audioeq.audio.AutoEqEntry
-import com.audioeq.audio.normalizeAutoEqFast
+import com.audioeq.audio.AutoEqRepository
+import com.audioeq.audio.DeviceFilter
 import com.audioeq.model.EngineMode
 import com.audioeq.model.HeadphoneProfile
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PresetConfig
 import com.audioeq.shizuku.ShizukuState
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
@@ -496,91 +497,29 @@ fun AutoEqCard(
     suggestedAutoEqEntry: AutoEqEntry?,
     autoEqClipped: Boolean,
     autoEqUseTenBandSliders: Boolean,
+    autoEqLoading: Boolean = false,
     onApplyAutoEqEntry: (AutoEqEntry) -> Unit,
     onToggleUseTenBandSliders: (Boolean) -> Unit,
     onClearAutoEq: () -> Unit,
     onDismissSuggestion: () -> Unit,
+    onRefreshDatabase: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMonetPalette.current
     var searchQuery by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf(DeviceFilter.ALL) }
 
     val selectedProfile = headphoneProfiles.find { it.id == selectedHeadphoneProfileId }
     val isProfileActive = selectedProfile != null && selectedProfile.id != "none"
 
-    val trimmedQuery = remember(searchQuery) { searchQuery.trim() }
-    val normalizedQuery = remember(trimmedQuery) { normalizeAutoEqFast(trimmedQuery) }
-    val matchingEntries by produceState(
-        initialValue = emptyList<AutoEqEntry>(),
-        key1 = normalizedQuery,
-        key2 = autoEqIndex
-    ) {
-        if (normalizedQuery.isEmpty() || autoEqIndex.isEmpty()) {
-            value = emptyList()
-        } else {
-            if (normalizedQuery.length <= 2) {
-                delay(40L)
-            }
-            value = withContext(Dispatchers.Default) {
-                val rawLower = trimmedQuery.lowercase(Locale.US)
-                val tokens = buildList {
-                    val cur = StringBuilder()
-                    for (i in 0 until rawLower.length) {
-                        val c = rawLower[i]
-                        if (c in 'a'..'z' || c in '0'..'9') {
-                            cur.append(c)
-                        } else if (cur.isNotEmpty()) {
-                            add(cur.toString())
-                            cur.setLength(0)
-                        }
-                    }
-                    if (cur.isNotEmpty()) add(cur.toString())
-                }
-
-                val matched = ArrayList<AutoEqEntry>(64)
-                for (i in 0 until autoEqIndex.size) {
-                    val entry = autoEqIndex[i]
-                    val isHit = if (entry.nameNorm.contains(normalizedQuery)) {
-                        true
-                    } else {
-                        var allTokens = tokens.isNotEmpty()
-                        for (t in 0 until tokens.size) {
-                            if (!entry.searchableText.contains(tokens[t])) {
-                                allTokens = false
-                                break
-                            }
-                        }
-                        allTokens
-                    }
-                    if (isHit) {
-                        matched.add(entry)
-                    }
-                }
-
-                matched.sortWith(
-                    Comparator { a, b ->
-                        val tierA = when {
-                            a.nameNorm == normalizedQuery -> 0
-                            a.nameNorm.startsWith(normalizedQuery) -> 1
-                            a.nameLower.contains(rawLower) -> 2
-                            a.nameNorm.contains(normalizedQuery) -> 3
-                            else -> 4
-                        }
-                        val tierB = when {
-                            b.nameNorm == normalizedQuery -> 0
-                            b.nameNorm.startsWith(normalizedQuery) -> 1
-                            b.nameLower.contains(rawLower) -> 2
-                            b.nameNorm.contains(normalizedQuery) -> 3
-                            else -> 4
-                        }
-                        if (tierA != tierB) return@Comparator tierA - tierB
-                        if (a.sourceRank != b.sourceRank) return@Comparator a.sourceRank - b.sourceRank
-                        a.name.length - b.name.length
-                    }
-                )
-                if (matched.size > 20) ArrayList(matched.subList(0, 20)) else matched
-            }
-        }
+    val trimmedQuery = searchQuery.trim()
+    val matchingEntries = remember(trimmedQuery, selectedFilter, autoEqIndex) {
+        AutoEqRepository.searchStatic(
+            index = autoEqIndex,
+            query = trimmedQuery,
+            filter = selectedFilter,
+            limit = 30
+        )
     }
 
     val modeFileDescription = when {
@@ -610,7 +549,7 @@ fun AutoEqCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -649,7 +588,7 @@ fun AutoEqCard(
                         )
                         Text(
                             text = if (isProfileActive && selectedProfile != null) {
-                                "${selectedProfile.name} (${selectedProfile.source}) · Preamp ${String.format(Locale.US, "%.1f", preampDb)} dB"
+                                "Applied: ${selectedProfile.name} (${selectedProfile.source}) · Preamp ${String.format(Locale.US, "%.1f", preampDb)} dB"
                             } else {
                                 modeFileDescription
                             },
@@ -728,26 +667,6 @@ fun AutoEqCard(
                 }
             }
 
-            if (operatingMode == OperatingMode.LEGACY_TIER1_EQ) {
-                Text(
-                    text = "Native 5-band Equalizer active: AutoEq accuracy is low.",
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontSize = 11.sp,
-                    color = palette.tertiary,
-                    modifier = Modifier.testTag("autoeq_low_accuracy_note")
-                )
-            }
-
-            if (autoEqClipped) {
-                Text(
-                    text = "Note: One or more bands exceeded ±12 dB and were clamped; negative preamp applied.",
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontSize = 11.sp,
-                    color = palette.primary,
-                    modifier = Modifier.testTag("autoeq_clipped_note")
-                )
-            }
-
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -792,7 +711,103 @@ fun AutoEqCard(
                     .testTag("autoeq_search_box")
             )
 
-            if (normalizedQuery.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DeviceFilter.values().forEach { f ->
+                    FilterChip(
+                        selected = selectedFilter == f,
+                        onClick = {
+                            selectedFilter = if (selectedFilter == f && f != DeviceFilter.ALL) {
+                                DeviceFilter.ALL
+                            } else {
+                                f
+                            }
+                        },
+                        enabled = masterEnabled,
+                        label = {
+                            Text(
+                                text = f.label,
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 11.5.sp
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = palette.primaryC,
+                            selectedLabelColor = palette.onPrimaryC,
+                            containerColor = palette.sHigh,
+                            labelColor = palette.onVar
+                        )
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (isProfileActive && selectedProfile != null) {
+                        "Applied: ${selectedProfile.name} (${selectedProfile.source})"
+                    } else {
+                        "${autoEqIndex.size} profiles"
+                    },
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontSize = 11.5.sp,
+                    color = palette.onVar,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onRefreshDatabase,
+                    enabled = masterEnabled && !autoEqLoading
+                ) {
+                    Text(
+                        text = if (autoEqIndex.isEmpty()) "Download database" else "Update",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.5.sp,
+                        color = palette.primary
+                    )
+                }
+            }
+
+            if (autoEqLoading) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = palette.primary,
+                    trackColor = palette.sHigh
+                )
+            }
+
+            if (operatingMode == OperatingMode.LEGACY_TIER1_EQ) {
+                Text(
+                    text = "Native 5-band Equalizer active: AutoEq accuracy is low.",
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontSize = 11.sp,
+                    color = palette.tertiary,
+                    modifier = Modifier.testTag("autoeq_low_accuracy_note")
+                )
+            }
+
+            if (autoEqClipped) {
+                Text(
+                    text = "Note: One or more bands exceeded ±12 dB and were clamped; negative preamp applied.",
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontSize = 11.sp,
+                    color = palette.primary,
+                    modifier = Modifier.testTag("autoeq_clipped_note")
+                )
+            }
+
+            val showSuggestions = trimmedQuery.isNotEmpty() || selectedFilter != DeviceFilter.ALL
+            if (showSuggestions) {
                 if (matchingEntries.isEmpty()) {
                     Text(
                         text = "No matching earphones or headphones found for \"$trimmedQuery\"",
@@ -818,8 +833,9 @@ fun AutoEqCard(
                                         color = if (isCurrent) palette.primary else palette.outlineV.copy(alpha = 0.45f),
                                         shape = RoundedCornerShape(12.dp)
                                     )
+                                    .clickable(enabled = masterEnabled && !autoEqLoading) { onApplyAutoEqEntry(entry) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    .testTag("autoeq_row_${entry.nameNorm}"),
+                                    .testTag("autoeq_row_${entry.nameCompact}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -847,12 +863,12 @@ fun AutoEqCard(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(if (isCurrent) palette.primary else palette.primaryC)
-                                        .clickable(enabled = masterEnabled) { onApplyAutoEqEntry(entry) }
+                                        .clickable(enabled = masterEnabled && !autoEqLoading) { onApplyAutoEqEntry(entry) }
                                         .padding(horizontal = 12.dp, vertical = 6.dp)
-                                        .testTag("autoeq_use_${entry.nameNorm}")
+                                        .testTag("autoeq_use_${entry.nameCompact}")
                                 ) {
                                     Text(
-                                        text = if (isCurrent) "Active" else "Use this",
+                                        text = if (isCurrent) "Active" else "Apply",
                                         fontFamily = SpaceGroteskFontFamily,
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 11.5.sp,
@@ -864,18 +880,6 @@ fun AutoEqCard(
                     }
                 }
             }
-
-            Text(
-                text = if (autoEqIndex.isNotEmpty()) {
-                    "AutoEq Repository (${autoEqIndex.size} models) · Type in search above to select your device"
-                } else {
-                    "AutoEq Repository · Type in search above to select your device"
-                },
-                fontSize = 10.sp,
-                color = palette.onVar.copy(alpha = 0.72f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }

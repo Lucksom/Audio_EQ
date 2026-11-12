@@ -177,61 +177,7 @@ class AudioEngineController(
 
     private fun startTelemetryLoop() {
         telemetryJob?.cancel()
-        telemetryJob = scope.launch(Dispatchers.Default) {
-            var phase = 0.0
-            while (isActive) {
-                phase += 0.22
-                val p = latestRenderParams
-                if (!p.masterEnabled || masterEngine.usbBitPerfectActive) {
-                    _liveSpectrum31.value = List(31) { -72f }
-                    _gainReduction6.value = List(6) { 0f }
-                } else {
-                    val cal31 = Dsp.computeHeadphoneCorrection31(
-                        profile = if (currentRoute != OutputRoute.SPEAKER) p.headphoneProfile else null,
-                        strength = p.headphoneStrength,
-                        fullRange = p.headphoneFullRange,
-                        tiltBassDb = p.tiltBassDb,
-                        tiltTrebleDb = p.tiltTrebleDb
-                    )
-                    val enh31 = EnhancerDsp.computeCombinedEnhancer31(
-                        config = p.enhancerConfig,
-                        isSpeaker = currentRoute == OutputRoute.SPEAKER
-                    )
-                    val combinedCal31 = DoubleArray(31) { (cal31[it] + enh31[it]).coerceIn(-15.0, 15.0) }
-                    val curve31 = Dsp.compute31BandTargets(
-                        userGains10 = p.bandGains10L,
-                        cal31 = combinedCal31,
-                        hpFc = p.highPassHz,
-                        iso226On = p.iso226Enabled,
-                        volIdx = 10,
-                        volMax = 15
-                    )
-                    val spec = List(31) { k ->
-                        val f = Dsp.F_DP[k]
-                        val pinkSlope = -3.0 * (kotlin.math.ln(f / 63.0) / kotlin.math.ln(2.0))
-                        val mod = kotlin.math.sin(phase + k * 0.43) * 3.2 +
-                            kotlin.math.cos(phase * 1.6 - k * 0.27) * 2.1
-                        (-26.0 + pinkSlope * 0.45 + curve31[k] + mod).toFloat().coerceIn(-72f, 0f)
-                    }
-                    _liveSpectrum31.value = spec
-
-                    val gr = List(6) { b ->
-                        val startIdx = b * 5
-                        val sliceMax = (startIdx until (startIdx + 5).coerceAtMost(31))
-                            .map { max(0.0, curve31[it]) }
-                            .maxOrNull() ?: 0.0
-                        val wobble = (kotlin.math.sin(phase * 1.4 + b) + 1.0) * 0.35
-                        if (sliceMax > 1.5 || p.limiterEnabled) {
-                            (-(sliceMax * 0.28 + wobble)).toFloat().coerceIn(-6.0f, 0f)
-                        } else {
-                            0f
-                        }
-                    }
-                    _gainReduction6.value = gr
-                }
-                delay(65L)
-            }
-        }
+        telemetryJob = null
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -300,7 +246,7 @@ class AudioEngineController(
             limiterCeilingDb = limiterCeilingDb.toDouble(),
             highPassHz = subBassHighPassHz.toDouble(),
             iso226Enabled = iso226ContourEnabled,
-            headphoneProfile = if (activeRoute != OutputRoute.SPEAKER) headphoneProfile else null,
+            headphoneProfile = headphoneProfile,
             headphoneStrength = headphoneCorrectionStrength.toDouble(),
             headphoneFullRange = headphoneFullRange,
             tiltBassDb = tiltBassDb.toDouble(),
@@ -338,7 +284,7 @@ class AudioEngineController(
         val trackedSummary = MusicAppTracker.trackedSessionsSummary.value
         val cfg = latestRenderParams.enhancerConfig
         val epSpec = EnhancerDsp.resolveEndpointSpec(cfg.profile, currentRoute, cfg.deepBassEnabled)
-        _diagnostics.value = DeviceDiagnostics(
+        val newDiag = DeviceDiagnostics(
             dynamicsProcessingSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
             dynamicsProcessingActive = masterEngine.activeOperatingMode != OperatingMode.LEGACY_TIER1_EQ &&
                 masterEngine.activeOperatingMode != OperatingMode.SUSPENDED_PRIVILEGED,
@@ -367,6 +313,9 @@ class AudioEngineController(
             endpointVolmax = epSpec.volmaxQ4,
             systemEqConflictResolved = systemEqResolved
         )
+        if (_diagnostics.value != newDiag) {
+            _diagnostics.value = newDiag
+        }
     }
 
     fun attachExternalAudioSession(sessionId: Int) {

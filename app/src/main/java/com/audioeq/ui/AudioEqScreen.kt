@@ -209,27 +209,27 @@ fun AudioEqScreen(
                     )
                 }
 
-                if (uiState.activeRoute != OutputRoute.SPEAKER) {
-                    item {
-                        AutoEqCard(
-                            masterEnabled = uiState.masterEnabled,
-                            activeRoute = uiState.activeRoute,
-                            connectedProductName = uiState.connectedProductName,
-                            engineMode = uiState.engineMode,
-                            operatingMode = uiState.operatingMode,
-                            headphoneProfiles = uiState.headphoneProfiles,
-                            selectedHeadphoneProfileId = uiState.headphoneProfileId,
-                            preampDb = uiState.preampDb,
-                            autoEqIndex = uiState.autoEqIndex,
-                            suggestedAutoEqEntry = uiState.suggestedAutoEqEntry,
-                            autoEqClipped = uiState.autoEqClipped,
-                            autoEqUseTenBandSliders = uiState.autoEqUseTenBandSliders,
-                            onApplyAutoEqEntry = { entry -> viewModel.applyAutoEqEntry(entry) },
-                            onToggleUseTenBandSliders = viewModel::setAutoEqUseTenBandSliders,
-                            onClearAutoEq = viewModel::clearAutoEqProfile,
-                            onDismissSuggestion = viewModel::dismissSuggestedAutoEq
-                        )
-                    }
+                item {
+                    AutoEqCard(
+                        masterEnabled = uiState.masterEnabled,
+                        activeRoute = uiState.activeRoute,
+                        connectedProductName = uiState.connectedProductName,
+                        engineMode = uiState.engineMode,
+                        operatingMode = uiState.operatingMode,
+                        headphoneProfiles = uiState.headphoneProfiles,
+                        selectedHeadphoneProfileId = uiState.headphoneProfileId,
+                        preampDb = uiState.preampDb,
+                        autoEqIndex = uiState.autoEqIndex,
+                        suggestedAutoEqEntry = uiState.suggestedAutoEqEntry,
+                        autoEqClipped = uiState.autoEqClipped,
+                        autoEqUseTenBandSliders = uiState.autoEqUseTenBandSliders,
+                        autoEqLoading = uiState.autoEqLoading,
+                        onApplyAutoEqEntry = { entry -> viewModel.applyAutoEqEntry(entry) },
+                        onToggleUseTenBandSliders = viewModel::setAutoEqUseTenBandSliders,
+                        onClearAutoEq = viewModel::clearAutoEqProfile,
+                        onDismissSuggestion = viewModel::dismissSuggestedAutoEq,
+                        onRefreshDatabase = viewModel::refreshAutoEqDatabase
+                    )
                 }
 
                 item {

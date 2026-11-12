@@ -367,12 +367,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         flowP5
     ) { p1, p2, p3, p4, p5 ->
         val allHp = EqConstants.BUILT_IN_HEADPHONE_PROFILES + p1.customHeadphoneProfiles
-        val isHeadphoneOrBtRoute = p1.activeRoute != OutputRoute.SPEAKER
-        val selHp = if (isHeadphoneOrBtRoute) {
-            allHp.find { it.id == p1.profile.headphoneProfileId }
-        } else {
-            null
-        }
+        val selHp = allHp.find { it.id == p1.profile.headphoneProfileId }
         val trimmed = if (selHp != null && selHp.peqFilters.isNotEmpty()) {
             AutoEq.computeTrimmedDb(selHp.peqFilters, p1.profile.headphoneFullRange).toFloat()
         } else {
@@ -389,7 +384,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             DoubleArray(10)
         }
-        val hpCorr31 = if (isHeadphoneOrBtRoute && selHp != null && selHp.id != "none") {
+        val hpCorr31 = if (selHp != null && selHp.id != "none") {
             Dsp.computeHeadphoneCorrection31(
                 profile = selHp,
                 strength = p1.profile.headphoneCorrectionStrength.toDouble(),
@@ -519,13 +514,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         refreshAutoEqCatalog(forceRefresh = false)
 
         viewModelScope.launch(Dispatchers.IO) {
-            val bundledIndex = autoEqRepository.loadBundledIndex()
-            if (bundledIndex.isNotEmpty()) {
-                _autoEqIndex.value = bundledIndex
-            }
-            val fullIndex = autoEqRepository.loadIndex(forceRefresh = true)
-            if (fullIndex.isNotEmpty()) {
-                _autoEqIndex.value = fullIndex
+            val loadedIndex = autoEqRepository.loadIndex(forceRefresh = false)
+            if (loadedIndex.isNotEmpty()) {
+                _autoEqIndex.value = loadedIndex
             }
             val prodName = engineController.diagnostics.value.connectedProductName
             val route = repository.activeRoute.value
@@ -589,11 +580,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             uiState.collect { state ->
                 val allHp = repository.getAllHeadphoneProfiles()
-                val selHp = if (state.activeRoute != OutputRoute.SPEAKER) {
-                    allHp.find { it.id == state.headphoneProfileId }
-                } else {
-                    null
-                }
+                val selHp = allHp.find { it.id == state.headphoneProfileId }
                 val effectiveBands = if (state.isEqEnabled) state.bands.map { it.gainDb * state.intensity } else List(state.bands.size) { 0f }
                 val effectiveRightBands = if (state.isEqEnabled) state.rightBands.map { it.gainDb * state.intensity } else List(state.rightBands.size) { 0f }
                 engineController.applyDspState(
@@ -730,29 +717,61 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _suggestedAutoEqEntry.value = null
     }
 
+    private fun resetAllEffectsForAutoEq() {
+        _isEqEnabled.value = true
+        _isAbCompare.value = false
+        _intensity.value = 1.0f
+        repository.updateEnhancerConfig { EnhancerConfig() }
+        val curHearing = repository.hearingCurve.value
+        if (curHearing.enabled) {
+            repository.updateHearingCurve(curHearing.copy(enabled = false))
+        }
+    }
+
     fun clearAutoEqProfile() {
         _autoEqClipped.value = false
         repository.updateCurrentRouteProfile {
+            val wasFixedBand = it.headphoneProfileId.startsWith("autoeq_fb_")
             it.copy(
+                presetId = if (wasFixedBand) "flat" else it.presetId,
+                bandGainsDb = if (wasFixedBand) List(10) { 0f } else it.bandGainsDb,
+                rightBandGainsDb = if (wasFixedBand) List(10) { 0f } else it.rightBandGainsDb,
                 headphoneProfileId = "none",
                 preampDb = 0f
             )
         }
-        _statusBanner.value = "Cleared AutoEq headphone profile"
+        _statusBanner.value = "Cleared AutoEq profile"
+    }
+
+    fun refreshAutoEqDatabase() {
+        if (_autoEqLoading.value) return
+        _autoEqLoading.value = true
+        viewModelScope.launch {
+            try {
+                val updated = autoEqRepository.refreshIndex { status ->
+                    _statusBanner.value = status
+                }
+                if (updated.isNotEmpty()) {
+                    _autoEqIndex.value = updated
+                    _statusBanner.value = "Updated AutoEq database (${updated.size} profiles)"
+                }
+            } catch (e: Exception) {
+                _statusBanner.value = "AutoEq update failed: ${e.message ?: "offline"}"
+            } finally {
+                _autoEqLoading.value = false
+            }
+        }
     }
 
     fun applyAutoEqEntry(
         entry: AutoEqEntry,
         useTenBandSliders: Boolean = _autoEqUseTenBandSliders.value
     ) {
-        if (repository.activeRoute.value == OutputRoute.SPEAKER) {
-            _statusBanner.value = "AutoEq is only for headphones/earphones, not phone speakers."
-            return
-        }
         _suggestedAutoEqEntry.value = null
         viewModelScope.launch {
             _autoEqLoading.value = true
             try {
+                resetAllEffectsForAutoEq()
                 if (useTenBandSliders) {
                     val fixedText = autoEqRepository.fetch(entry, AutoEqKind.FIXED_BAND)
                     val p = AutoEqParser.parseParametric(fixedText)
@@ -773,10 +792,22 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     repository.registerCustomHeadphoneProfile(profile)
                     repository.updateCurrentRouteProfile {
                         it.copy(
+                            presetId = "custom",
                             headphoneProfileId = safeId,
+                            headphoneCorrectionStrength = 1.0f,
+                            headphoneFullRange = false,
                             bandGainsDb = gainsFloat,
                             rightBandGainsDb = gainsFloat,
-                            preampDb = t.preampDb.toFloat().coerceIn(-12f, 6f)
+                            splitLREnabled = false,
+                            balanceDb = 0f,
+                            preampDb = t.preampDb.toFloat().coerceIn(-12f, 6f),
+                            tiltBassDb = 0f,
+                            tiltTrebleDb = 0f,
+                            iso226ContourEnabled = false,
+                            speakerCalibrationEnabled = false,
+                            subBassHighPassHz = 0f,
+                            midSideWidth = 1.0f,
+                            vocalPresenceBoost = 0f
                         )
                     }
                     val clipNote = if (t.clipped) " (±12 dB band limit clamped)" else ""
@@ -802,8 +833,22 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     repository.registerCustomHeadphoneProfile(profile)
                     repository.updateCurrentRouteProfile {
                         it.copy(
+                            presetId = "flat",
                             headphoneProfileId = safeId,
-                            preampDb = safePreamp.toFloat().coerceIn(-12f, 6f)
+                            headphoneCorrectionStrength = 1.0f,
+                            headphoneFullRange = false,
+                            bandGainsDb = List(10) { 0f },
+                            rightBandGainsDb = List(10) { 0f },
+                            splitLREnabled = false,
+                            balanceDb = 0f,
+                            preampDb = safePreamp.toFloat().coerceIn(-12f, 6f),
+                            tiltBassDb = 0f,
+                            tiltTrebleDb = 0f,
+                            iso226ContourEnabled = false,
+                            speakerCalibrationEnabled = false,
+                            subBassHighPassHz = 0f,
+                            midSideWidth = 1.0f,
+                            vocalPresenceBoost = 0f
                         )
                     }
                     val opMode = engineController.diagnostics.value.operatingMode
@@ -836,13 +881,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             clearAutoEqProfile()
             return
         }
-        if (repository.activeRoute.value == OutputRoute.SPEAKER) {
-            _statusBanner.value = "AutoEq is disabled on speaker output."
-            return
-        }
         val allHp = repository.getAllHeadphoneProfiles()
         val sel = allHp.find { it.id == profileId }
         if (sel != null) {
+            resetAllEffectsForAutoEq()
             val safePreamp = if (sel.peqFilters.isNotEmpty()) {
                 val autoProf = AutoEqMapper.fromPeqFilters(sel.peqFilters)
                 AutoEqMapper.safePreampDb(autoProf).toFloat().coerceIn(-12f, 6f)
@@ -851,8 +893,22 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             }
             repository.updateCurrentRouteProfile {
                 it.copy(
+                    presetId = "flat",
                     headphoneProfileId = profileId,
-                    preampDb = safePreamp
+                    headphoneCorrectionStrength = 1.0f,
+                    headphoneFullRange = false,
+                    bandGainsDb = List(10) { 0f },
+                    rightBandGainsDb = List(10) { 0f },
+                    splitLREnabled = false,
+                    balanceDb = 0f,
+                    preampDb = safePreamp,
+                    tiltBassDb = 0f,
+                    tiltTrebleDb = 0f,
+                    iso226ContourEnabled = false,
+                    speakerCalibrationEnabled = false,
+                    subBassHighPassHz = 0f,
+                    midSideWidth = 1.0f,
+                    vocalPresenceBoost = 0f
                 )
             }
             _statusBanner.value = "Applied AutoEq: ${sel.name} (${sel.source}) · Preamp ${String.format("%.1f", safePreamp)} dB"

@@ -701,7 +701,7 @@ class MasterEqEngine(
             OutputRoute.SPEAKER
         }
         val isSpeakerRoute = (activeRoute == OutputRoute.SPEAKER)
-        val effectiveHpProfile = if (!isSpeakerRoute) params.headphoneProfile else null
+        val effectiveHpProfile = params.headphoneProfile
 
         val calCurve = DoubleArray(31)
         val hpCurve = Dsp.computeHeadphoneCorrection31(
