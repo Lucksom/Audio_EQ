@@ -408,13 +408,16 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             DoubleArray(31)
         }
+        val scaledUser10 = sliderGains.map { (if (p1.isEqEnabled) it * p1.intensity else 0f).toDouble() }.toDoubleArray()
         val enh31 = EnhancerDsp.computeCombinedEnhancer31(
             config = p1.enhancerConfig,
             isSpeaker = p1.activeRoute == OutputRoute.SPEAKER,
-            sampleRate = p2.diagnostics.hardwareSampleRateHz.toDouble()
+            sampleRate = p2.diagnostics.hardwareSampleRateHz.toDouble(),
+            userBand0Db = scaledUser10.getOrElse(0) { 0.0 },
+            userBand1Db = scaledUser10.getOrElse(1) { 0.0 }
         )
         val deepShift31 = EnhancerDsp.computeDeepBassShiftDelta31(
-            userGains10 = sliderGains.map { (it * p1.intensity).toDouble() }.toDoubleArray(),
+            userGains10 = scaledUser10,
             deepBassEnabled = p1.enhancerConfig.deepBassEnabled
         )
         val baseWithTone10 = EqConstants.FREQ_10_BAND.indices.map { i ->
@@ -1432,6 +1435,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setUsbBitPerfectEnabled(enabled: Boolean) {
         repository.setUsbBitPerfectEnabled(enabled)
+    }
+
+    fun toggleBluetoothAbsoluteVolume(disabled: Boolean) {
+        engineController.setBluetoothAbsoluteVolumeDisabled(disabled)
     }
 
     fun setMusicOnlyTrackingEnabled(enabled: Boolean) {

@@ -101,7 +101,6 @@ class AudioEqRobolectricTest {
     @Test
     fun `verify MusicAppTracker auto-detects when empty and strictly filters when device apps are selected`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        // 1. Empty selection -> auto-detect music & media players on the device
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
         com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
         assertTrue(
@@ -133,7 +132,6 @@ class AudioEqRobolectricTest {
             )
         )
 
-        // 2. Non-empty device app selection -> strict whitelist
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(setOf("com.spotify.music"))
         assertTrue(
             com.audioeq.audio.MusicAppTracker.isMusicAppPackage(
@@ -150,7 +148,6 @@ class AudioEqRobolectricTest {
             )
         )
 
-        // 3. Clearing returns to auto-detect, still respecting explicit exclusions
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
         com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(setOf("com.spotify.music"))
         org.junit.Assert.assertFalse(
@@ -228,7 +225,6 @@ class AudioEqRobolectricTest {
             hasPrivilegedControl = false
         )
 
-        // Open broadcast session from an unselected app (e.g., Chrome) and a selected app (Spotify)
         com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
             context = context,
             sessionId = 501,
@@ -246,7 +242,6 @@ class AudioEqRobolectricTest {
         assertTrue(legacyAll.contains(501))
         assertTrue(legacyAll.contains(502))
 
-        // Switch to privileged mode (Root/Shizuku) -> strict filtering excludes 501 (Chrome)
         com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
             context = context,
             isLegacyMode = false,
@@ -256,7 +251,6 @@ class AudioEqRobolectricTest {
         org.junit.Assert.assertFalse(verifiedOnly.contains(501))
         assertTrue(verifiedOnly.contains(502))
 
-        // Cleanup
         com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 501)
         com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 502)
         com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
@@ -289,7 +283,6 @@ class AudioEqRobolectricTest {
                 "Legacy Mix AUTO label should reflect 31-Band DP default",
                 com.audioeq.model.LegacyGlobalMixMode.AUTO.label.contains("31-Band DP")
             )
-            // Verify healthy query does not throw
             engine.isSession0Healthy()
             assertTrue(engine.getLegacyEngineSummary().startsWith("Mix 0:"))
         } finally {

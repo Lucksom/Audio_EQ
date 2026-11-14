@@ -296,8 +296,8 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.GraphicEq,
                 title = "Deep Bass",
-                subtitle = "DC low-shelf sub-bass filter & 10-band downward bass shift",
-                badgeText = if (deepBassActive) "DC SHELF" else "STD PEAK",
+                subtitle = "3-Stage Sub-Bass Engine: 38 Hz Resonant DC Shelf + 47 Hz Peak + Dynamic Envelope Booster",
+                badgeText = if (deepBassActive) "3-STAGE DC" else "STD PEAK",
                 checked = deepBassActive,
                 enabled = enabled,
                 onCheckedChange = onToggleDeepBass,
@@ -310,7 +310,7 @@ fun EnhancerCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Shifts Bands 0–9 downward by one step for extended sub-bass",
+                            text = "38 Hz Q=0.90 DC shelf + 47 Hz Q=1.15 peak + 210 Hz anti-mud pocket",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = palette.textSecondary,
                                 fontSize = 11.sp
@@ -350,21 +350,28 @@ fun EnhancerCard(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
-                                    text = "Normal vs. Deep Bass:",
+                                    text = "3-Stage Deep Bass Architecture:",
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
                                         color = palette.primary
                                     )
                                 )
                                 Text(
-                                    text = "• Normal Default Bass: Band 0 uses a standard peaking filter whose boost rolls off in the lowest sub-bass range toward 0 dB.",
+                                    text = "• Stage A (0–38 Hz Resonant DC Low-Shelf): Uses fc = 38 Hz, Q = 0.90 (+4.5 dB offset) for a tight sub-infra lift from 15 Hz to 42 Hz with a clean dip above the shelf.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp
                                     )
                                 )
                                 Text(
-                                    text = "• Deep Bass: Shifts the first 10 bands down by one step so Band 0 becomes a DC Low-Shelf filter (Q=0.7071), keeping full sub-bass boost across the lowest octaves without roll-off.",
+                                    text = "• Stage B (47 Hz Sub-Bass Peak + 210 Hz Anti-Mud): Shifts Band 1 to 47 Hz (Q = 1.15, +3.5 dB) and carves a -2.5 dB pocket at 210 Hz (Q = 1.40) so vocals stay clear.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = "• Stage C (Sub-110 Hz Dynamic Envelope Booster): Applies upward sub-bass expansion and warm harmonic saturation on kick transients.",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = palette.textSecondary,
                                         fontSize = 11.sp

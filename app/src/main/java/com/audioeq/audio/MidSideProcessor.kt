@@ -1,5 +1,24 @@
 package com.audioeq.audio
 
+import com.audioeq.model.FilterType
+import kotlin.math.abs
+import kotlin.math.pow
+import kotlin.math.tanh
+
+object SoftKneeLimiter {
+    private const val KNEE_START = 0.8414f
+    private const val CEILING = 0.9885f
+
+    fun processSample(x: Float): Float {
+        val absX = abs(x)
+        if (absX <= KNEE_START) return x
+        val sign = if (x >= 0f) 1f else -1f
+        val excess = (absX - KNEE_START) / (CEILING - KNEE_START).coerceAtLeast(1e-5f)
+        val compressed = KNEE_START + (CEILING - KNEE_START) * tanh(excess.toDouble()).toFloat()
+        return sign * compressed
+    }
+}
+
 class MidSideProcessor(sampleRate: Int = 48000) {
 
     constructor(sampleRate: Double) : this(sampleRate.toInt())
@@ -35,6 +54,23 @@ class MidSideProcessor(sampleRate: Int = 48000) {
 
     private val midVocalFilter = BiquadFilter()
     private val sideHighShelfFilter = BiquadFilter()
+
+    private val monoLowPassFilter = BiquadFilter()
+    private val monoHighPassFilter = BiquadFilter()
+
+    private val crossfeedFilterL = BiquadFilter()
+    private val crossfeedFilterR = BiquadFilter()
+    private var delaySampleCount: Int = 14
+    private var delayLineL = FloatArray(32)
+    private var delayLineR = FloatArray(32)
+    private var delayWriteIdx: Int = 0
+
+    private val deepStageALowShelf = BiquadFilter()
+    private val deepStageBSubPeak = BiquadFilter()
+    private val deepStageBAntiMud = BiquadFilter()
+    private val deepStageCSubExtractor = BiquadFilter()
+    private var subEnvelope: Double = 0.0
+    private var deepBassBoostLinear: Double = 0.0
 
     init {
         configureFilters(sampleRate)
@@ -73,40 +109,129 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     fun updateParameters(
         width: Float,
         vocalBoost: Float,
-        sampleRate: Int = 48000
+        sampleRate: Int = 48000,
+        deepBassEnabled: Boolean = enhancerConfig.deepBassEnabled,
+        deepBassBoostDb: Float = enhancerConfig.bassBoostDb,
+        userBand0Db: Float = effective10BandDb.getOrElse(0) { 0f },
+        userBand1Db: Float = effective10BandDb.getOrElse(1) { 0f }
     ) {
-        currentSampleRate = sampleRate
+        currentSampleRate = sampleRate.coerceIn(44100, 192000)
         stereoWidth = width.coerceIn(0.5f, 2.0f)
         vocalPresenceBoost = vocalBoost.coerceIn(0f, 1f)
-        configureFilters(sampleRate)
+        enhancerConfig = enhancerConfig.copy(
+            deepBassEnabled = deepBassEnabled,
+            bassEnabled = deepBassBoostDb > 0.05f || enhancerConfig.bassEnabled,
+            bassBoostDb = if (deepBassBoostDb > 0.05f) deepBassBoostDb else enhancerConfig.bassBoostDb
+        )
+        if (effective10BandDb.size < 2 ||
+            abs(effective10BandDb[0] - userBand0Db) > 0.01f ||
+            abs(effective10BandDb[1] - userBand1Db) > 0.01f
+        ) {
+            val updated = MutableList(10) { idx -> effective10BandDb.getOrElse(idx) { 0f } }
+            updated[0] = userBand0Db
+            updated[1] = userBand1Db
+            effective10BandDb = updated
+        }
+        configureFilters(currentSampleRate)
     }
 
     private fun configureFilters(sampleRate: Int) {
+        val fs = sampleRate.toDouble()
         val vocalGainDb = vocalPresenceBoost * 4.2
         midVocalFilter.configurePeaking(
             frequencyHz = 2150.0,
-            sampleRate = sampleRate.toDouble(),
+            sampleRate = fs,
             gainDb = vocalGainDb,
             q = 1.15
         )
         val airDb = (stereoWidth - 1.0f).coerceAtLeast(0f) * 2.5
         sideHighShelfFilter.configurePeaking(
             frequencyHz = 6500.0,
-            sampleRate = sampleRate.toDouble(),
+            sampleRate = fs,
             gainDb = airDb,
             q = 0.85
         )
+
+        monoLowPassFilter.configureLowPass(180.0, fs, q = 0.5)
+        monoHighPassFilter.configure(FilterType.HIGH_PASS, 180.0, fs, 0.0, q = 0.5)
+
+        crossfeedFilterL.configureLowPass(700.0, fs, q = 0.7071)
+        crossfeedFilterR.configureLowPass(700.0, fs, q = 0.7071)
+        delaySampleCount = ((0.00030 * fs).toInt()).coerceIn(4, 30)
+        if (delayLineL.size < delaySampleCount + 2) {
+            delayLineL = FloatArray(delaySampleCount + 4)
+            delayLineR = FloatArray(delaySampleCount + 4)
+            delayWriteIdx = 0
+        }
+
+        val userBand0 = effective10BandDb.getOrElse(0) { 0f }.toDouble()
+        val userBand1 = effective10BandDb.getOrElse(1) { 0f }.toDouble()
+        val driveScale = if (enhancerConfig.bassEnabled && enhancerConfig.bassBoostDb > 0.5f) {
+            (enhancerConfig.bassBoostDb.toDouble() / 4.5).coerceIn(0.65, 1.35)
+        } else {
+            1.0
+        }
+        val g0ShelfDb = (userBand0 + 4.5 * driveScale).coerceIn(2.0, 10.5)
+        val g1PeakDb = (userBand1 + 3.5 * driveScale).coerceIn(1.5, 9.5)
+        val gMudCutDb = (-2.5 * driveScale).coerceIn(-3.5, -1.5)
+
+        deepStageALowShelf.configure(FilterType.LOW_SHELF, 38.0, fs, g0ShelfDb, q = 0.90)
+        deepStageBSubPeak.configurePeaking(47.0, fs, g1PeakDb, q = 1.15)
+        deepStageBAntiMud.configurePeaking(210.0, fs, gMudCutDb, q = 1.40)
+        deepStageCSubExtractor.configureLowPass(120.0, fs, q = 0.7071)
+
+        val bassEnhancerBoostDb = if (enhancerConfig.deepBassEnabled) {
+            if (enhancerConfig.bassEnabled && enhancerConfig.bassBoostDb > 0.5f) {
+                enhancerConfig.bassBoostDb.toDouble().coerceIn(2.0, 6.0)
+            } else {
+                3.75
+            }
+        } else {
+            0.0
+        }
+        deepBassBoostLinear = (10.0.pow(bassEnhancerBoostDb / 20.0) - 1.0) * 0.45
     }
 
     fun processInterleavedStereo(buffer: FloatArray, frameCount: Int) {
+        if (!enabled) return
         val width = stereoWidth.coerceIn(0.5f, 2.0f)
+        val deepActive = enhancerConfig.deepBassEnabled
+        val crossfeedMix = if (width > 1.01f) ((width - 1.0f) * 0.18f).coerceIn(0f, 0.20f) else 0f
+        val dLen = delayLineL.size
+
         var idx = 0
         for (frame in 0 until frameCount) {
-            val left = buffer[idx]
-            val right = buffer[idx + 1]
+            var left = buffer[idx].toDouble()
+            var right = buffer[idx + 1].toDouble()
 
-            var mid = 0.5f * (left + right)
-            var side = 0.5f * (left - right)
+            if (deepActive) {
+                left = deepStageALowShelf.processLeft(left)
+                right = deepStageALowShelf.processRight(right)
+
+                left = deepStageBSubPeak.processLeft(left)
+                right = deepStageBSubPeak.processRight(right)
+                left = deepStageBAntiMud.processLeft(left)
+                right = deepStageBAntiMud.processRight(right)
+
+                val subL = deepStageCSubExtractor.processLeft(left)
+                val subR = deepStageCSubExtractor.processRight(right)
+                val subMono = 0.5 * (subL + subR)
+                subEnvelope = 0.995 * subEnvelope + 0.005 * abs(subMono)
+                val dynGain = deepBassBoostLinear / (1.0 + 1.8 * subEnvelope)
+                val excitedSub = tanh(1.6 * subMono) * dynGain
+                left += excitedSub
+                right += excitedSub
+            }
+
+            val lowL = monoLowPassFilter.processLeft(left)
+            val lowR = monoLowPassFilter.processRight(right)
+            val monoSub = 0.5f * (lowL + lowR).toFloat()
+
+            val highL = monoHighPassFilter.processLeft(left).toFloat()
+            val highR = monoHighPassFilter.processRight(right).toFloat()
+
+            var mid = 0.5f * (highL + highR)
+            var side = 0.5f * (highL - highR)
 
             if (vocalPresenceBoost > 0.01f) {
                 mid = midVocalFilter.processSample(mid)
@@ -117,11 +242,23 @@ class MidSideProcessor(sampleRate: Int = 48000) {
 
             side *= width
 
-            val outLeft = (mid + side).coerceIn(-0.98f, 0.98f)
-            val outRight = (mid - side).coerceIn(-0.98f, 0.98f)
+            var outLeft = monoSub + (mid + side)
+            var outRight = monoSub + (mid - side)
 
-            buffer[idx] = outLeft
-            buffer[idx + 1] = outRight
+            if (crossfeedMix > 0.005f && dLen > delaySampleCount) {
+                val readIdx = (delayWriteIdx - delaySampleCount + dLen) % dLen
+                val delayedL = delayLineL[readIdx]
+                val delayedR = delayLineR[readIdx]
+                delayLineL[delayWriteIdx] = crossfeedFilterL.processLeft(outLeft.toDouble()).toFloat()
+                delayLineR[delayWriteIdx] = crossfeedFilterR.processRight(outRight.toDouble()).toFloat()
+                delayWriteIdx = (delayWriteIdx + 1) % dLen
+
+                outLeft += delayedR * crossfeedMix
+                outRight += delayedL * crossfeedMix
+            }
+
+            buffer[idx] = SoftKneeLimiter.processSample(outLeft)
+            buffer[idx + 1] = SoftKneeLimiter.processSample(outRight)
             idx += 2
         }
     }
@@ -145,3 +282,4 @@ class MidSideProcessor(sampleRate: Int = 48000) {
         return (normalized * 1000f).toInt()
     }
 }
+

@@ -739,7 +739,6 @@ object MusicAppTracker {
             for (line in lines) {
                 val lowerLine = line.lowercase(Locale.US)
                 if (lowerLine.contains("audio event log")) {
-                    // Stop before historical playback event log entries so closed/old apps don't linger
                     break
                 }
                 val uPidPair = Regex("""u/pid\s*[:=]\s*(\d+)\s*/\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
@@ -815,7 +814,6 @@ object MusicAppTracker {
                     continue
                 }
                 if (inEffectsBlock) continue
-                // Skip inactive track rows in AudioFlinger table dumps
                 if (Regex("""\s+no\s+\d+""", RegexOption.IGNORE_CASE).containsMatchIn(line)) {
                     continue
                 }

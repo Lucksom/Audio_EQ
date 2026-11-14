@@ -247,10 +247,10 @@ class EqualizerDatabaseHelper(context: Context) :
             ),
             arrayOf(
                 "deep_bass_dc_shelf",
-                "Deep Bass Mode (0 Hz DC Low-Shelf & 10-Band Downward Shift)",
-                "Z-Domain Biquad Cascade",
-                "H_shelf(z): fc=35Hz, Q=0.7071; Shift: 47->0Hz, 141->47Hz, ..., 1688->1313Hz",
-                """{"fc_hz":35.0,"q":0.7071,"shift_bands":10,"volmax_spk":24,"volmax_hp":36,"volmax_bt":32}"""
+                "Deep Bass Mode (3-Stage Sub-Bass Engine: 38 Hz DC Shelf + 47 Hz Peak + Dynamic Booster)",
+                "Z-Domain Biquad Cascade & Envelope Booster",
+                "Stage A: fc=38Hz, Q=0.90, G0=G[0]+4.5dB; Stage B: fc=47Hz, Q=1.15, G1=G[1]+3.5dB, AntiMud=210Hz(-2.5dB); Stage C: E[n]=0.995*E[n-1]+0.005*|x_sub|, tanh(1.6*x_sub)",
+                """{"stage_a_fc_hz":38.0,"stage_a_q":0.90,"stage_b_fc_hz":47.0,"stage_b_q":1.15,"anti_mud_fc_hz":210.0,"stage_c_lpf_hz":120.0,"volmax_spk":24,"volmax_hp":36,"volmax_bt":32}"""
             ),
             arrayOf(
                 "balanced_ieq_20band",

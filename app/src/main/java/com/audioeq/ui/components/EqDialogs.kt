@@ -1227,6 +1227,7 @@ fun SettingsAndDiagnosticsSheet(
     onToggleUsbBitPerfect: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
+    onToggleBtAbsVol: (Boolean) -> Unit = {},
     onToggleMusicOnlyTracking: (Boolean) -> Unit = {},
     onToggleMusicPackage: (String) -> Unit = {},
     onAddCustomMusicPackage: (String) -> Unit = {},
@@ -1470,6 +1471,17 @@ fun SettingsAndDiagnosticsSheet(
                             color = palette.primary
                         )
                     }
+
+                    HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                    V7SwitchRow(
+                        title = "Disable Bluetooth absolute volume",
+                        subtitle = "Separates phone & headset volume so ISO 226 loudness contour tracks real listening level",
+                        checked = diagnostics.btDisableAbsVolActive,
+                        enabled = privilegeAlreadyReady,
+                        onCheckedChange = onToggleBtAbsVol,
+                        testTag = "bt_disable_abs_vol_switch"
+                    )
                 }
 
                 Text(
@@ -1865,15 +1877,15 @@ fun SettingsAndDiagnosticsSheet(
             SettingsGroupCard(title = "ENGINE MODE ACCESSIBILITY & ASSIGNED PROCESSES") {
                 DiagnosticRow(
                     "Legacy Mode (Zero ADB/Root)",
-                    "Global Output Mix (Session 0) · Zero Session Tracking · 31-Band DP (with Native 5-Band FX fallback)"
+                    "Global Output Mix (Session 0) · 3-Stage Deep Bass · 31-Band DP (with Native 5-Band FX fallback)"
                 )
                 DiagnosticRow(
                     "ADB / Shizuku Mode (UID 2000)",
-                    "AudioFlinger Session Discovery · Per-App Isolation · Real-Time Sample Rate (fs=${diagnostics.hardwareSampleRateHz}Hz) · BT A2DP Codec Inspection"
+                    "Dual-Stage Pre-EQ + Post-EQ · 6-Band MBC Upward Expansion · True Sample Rate (fs=${diagnostics.hardwareSampleRateHz}Hz) · Competing FX Stop"
                 )
                 DiagnosticRow(
                     "Root Mode (su UID 0)",
-                    "AudioFlinger Session Discovery · Direct Hardware 20-Band Q4 Register Write · System Dual-EQ Conflict Guard",
+                    "Dual-Stage Pre-EQ + Post-EQ · Volatile Offload Bypass & Sinc Resampler (q=7) · Direct 20-Band Q4 Register Bridge",
                     showBottomBorder = false
                 )
             }
@@ -1919,7 +1931,8 @@ fun SettingsAndDiagnosticsSheet(
                 DiagnosticRow("Endpoint Peak Ceiling (Q8)", "${diagnostics.endpointPeakQ8} / 256")
                 DiagnosticRow("Endpoint Makeup (VOLMAX)", "${diagnostics.endpointVolmax} (Unity = 32)")
                 DiagnosticRow("Hardware DSP Bridge", hwBridgeLabel)
-                DiagnosticRow("System Dual-EQ Guard", if (diagnostics.systemEqConflictResolved) "Resolved via su" else "Software Isolated")
+                DiagnosticRow("System Dual-EQ Guard", if (diagnostics.systemEqConflictResolved) "Active (Volatile Shell)" else "Software Isolated")
+                DiagnosticRow("BT Absolute Volume Bypass", if (diagnostics.btDisableAbsVolActive) "Disabled (Contour Active)" else "System Default")
                 DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
                 DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported (>234 Hz)" else "Not Supported")
                 DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")

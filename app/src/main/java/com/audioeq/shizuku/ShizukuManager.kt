@@ -205,7 +205,6 @@ object ShizukuManager {
             if (bin.startsWith("/") && !java.io.File(bin).exists()) continue
             val dashC = runSuProcess(bin, "id", useDashC = true, timeoutMs = perBinTimeout)
             if (dashC == null) {
-                // Timed out waiting on su prompt or IO; avoid double-prompting another su variant
                 continue
             }
             if (dashC.first == 0 && dashC.second.contains("uid=0")) {
@@ -317,14 +316,67 @@ object ShizukuManager {
         }
     }
 
-    fun resolveSystemEqConflictIfRoot(): Boolean {
-        if (!isRootAvailable()) return false
-        val cmd = "setprop persist.audio.system_eq.enable false"
-        if (isShizukuRunningAsRoot()) {
-            execIfBound(cmd)
-            return true
+    fun stopCompetingSystemAudioEffects(): Boolean {
+        val packagesToStop = listOf(
+            "com.android.musicfx",
+            "org.lineageos.audiofx",
+            "com.sec.android.app.soundalive",
+            "com.motorola.audiomonitor",
+            "com.oneplus.sound.tuner",
+            "com.oplus.audioeffectcenter"
+        )
+        val stopCmd = buildString {
+            for (pkg in packagesToStop) {
+                append("am force-stop ").append(pkg).append(" >/dev/null 2>&1; ")
+            }
+            append("settings put system sound_effects_enabled 0 >/dev/null 2>&1; echo ok")
         }
-        return execSuCommand("$cmd && echo ok")?.contains("ok") == true
+        return execPrivilegedCommand(stopCmd)?.contains("ok") == true
+    }
+
+    fun bypassSafeMediaVolumeCap(): Boolean {
+        val cmd = "settings put global audio_safe_volume_state 2 >/dev/null 2>&1; " +
+            "settings put secure unsafe_volume_music_active_ms 0 >/dev/null 2>&1; echo ok"
+        return execPrivilegedCommand(cmd)?.contains("ok") == true
+    }
+
+    fun isBluetoothAbsoluteVolumeDisabled(): Boolean {
+        val out = execPrivilegedCommand("settings get global bluetooth_disable_absolute_volume")?.trim()
+        return out == "1" || out.equals("true", ignoreCase = true)
+    }
+
+    fun setBluetoothAbsoluteVolumeDisabled(disabled: Boolean): Boolean {
+        val flag = if (disabled) "1" else "0"
+        val out = execPrivilegedCommand("settings put global bluetooth_disable_absolute_volume $flag && echo ok")
+        return out?.contains("ok") == true
+    }
+
+    fun applyRootAudioFlingerOptimizations(): Boolean {
+        if (!isRootAvailable()) return false
+        val volatileCmd = buildString {
+            append("setprop vendor.audio.offload.disable 1 >/dev/null 2>&1; ")
+            append("setprop audio.offload.disable 1 >/dev/null 2>&1; ")
+            append("setprop vendor.audio.feature.deepbuffer_as_primary.enable false >/dev/null 2>&1; ")
+            append("setprop af.resampler.quality 7 >/dev/null 2>&1; ")
+            append("if command -v tinymix >/dev/null 2>&1; then ")
+            append("tm_out=\$(tinymix 2>/dev/null); ")
+            append("case \"\$tm_out\" in *\"COMP1 Switch\"*) tinymix \"COMP1 Switch\" 0 >/dev/null 2>&1; tinymix \"COMP2 Switch\" 0 >/dev/null 2>&1 ;; esac; ")
+            append("fi; ")
+            append("echo ok")
+        }
+        return if (isShizukuRunningAsRoot()) {
+            execIfBound(volatileCmd)?.contains("ok") == true
+        } else {
+            execSuCommand(volatileCmd)?.contains("ok") == true
+        }
+    }
+
+    fun resolveSystemEqConflictIfRoot(): Boolean {
+        val stopped = stopCompetingSystemAudioEffects()
+        bypassSafeMediaVolumeCap()
+        if (!isRootAvailable()) return stopped
+        val rootOpt = applyRootAudioFlingerOptimizations()
+        return stopped || rootOpt
     }
 
     @Volatile private var service: IUserService? = null

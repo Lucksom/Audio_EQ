@@ -422,4 +422,57 @@ class AudioEqUnitTest {
             )
         )
     }
+
+    @Test
+    fun verifyThreeStageDeepBassResonantShelfPeakAndAntiMudPocket() {
+        val deepCurve = EnhancerDsp.computeDeepBassCurve31(
+            config = EnhancerConfig(deepBassEnabled = true, bassEnabled = true, bassBoostDb = 4.5f),
+            sampleRate = 48000.0,
+            userBand0Db = 3.0,
+            userBand1Db = 2.0
+        )
+        assertEquals(31, deepCurve.size)
+        assertTrue("20 Hz sub-bass lift must exceed +6 dB", deepCurve[0] > 6.0)
+        assertTrue("31.5 Hz sub-bass lift must exceed +5.5 dB", deepCurve[2] > 5.5)
+        assertTrue("50 Hz fundamental peak must exceed +4.5 dB", deepCurve[4] > 4.5)
+        assertTrue("200 Hz anti-mud region must carve a negative pocket (< -1.0 dB)", deepCurve[10] < -1.0)
+    }
+
+    @Test
+    fun verifyMidSideProcessorWithThreeStageDeepBassMonoMakerAndCrossfeed() {
+        val processor = MidSideProcessor(48000)
+        processor.updateParameters(
+            width = 1.45f,
+            vocalBoost = 0.35f,
+            sampleRate = 48000,
+            deepBassEnabled = true,
+            deepBassBoostDb = 4.5f,
+            userBand0Db = 4.0f,
+            userBand1Db = 3.0f
+        )
+        val pcm = ShortArray(512) { idx ->
+            val phase = (idx / 2) * 0.05
+            val sample = (kotlin.math.sin(phase) * 12000.0).toInt()
+            if (idx % 2 == 0) sample.toShort() else (-sample / 2).toShort()
+        }
+        processor.processInterleavedPcm16(pcm, pcm.size)
+        assertTrue("Processed PCM with 3-stage Deep Bass must contain non-zero samples", pcm.any { it.toInt() != 0 })
+    }
+
+    @Test
+    fun verifyTrueBiquadAutoPreampPreventsClippingOnOverlapBoosts() {
+        val heavyBassUser10 = doubleArrayOf(9.0, 8.0, 4.0, 0.0, 0.0, 0.0, 2.0, 3.0, 4.0, 5.0)
+        val extraCal31 = EnhancerDsp.computeDeepBassCurve31(
+            config = EnhancerConfig(deepBassEnabled = true, bassEnabled = true, bassBoostDb = 4.5f),
+            sampleRate = 48000.0,
+            userBand0Db = 9.0,
+            userBand1Db = 8.0
+        )
+        val autoPreamp = EnhancerDsp.computeTrueBiquadAutoPreampDb(
+            userGains10 = heavyBassUser10,
+            extraCurve31 = extraCal31,
+            sampleRate = 48000.0
+        )
+        assertTrue("True biquad auto-preamp must attenuate overlapping sub-bass boosts", autoPreamp < -6.0)
+    }
 }

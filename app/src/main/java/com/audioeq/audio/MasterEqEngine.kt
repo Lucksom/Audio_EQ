@@ -109,6 +109,7 @@ class MasterEqEngine(
     private val dpSessions = ConcurrentHashMap<Int, DynamicsProcessing>()
     private val dpBandCounts = ConcurrentHashMap<Int, Int>()
     private val dpMbcEnabled = ConcurrentHashMap<Int, Boolean>()
+    private val dpPostEqEnabled = ConcurrentHashMap<Int, Boolean>()
     private val desiredSessionEnabled = ConcurrentHashMap<Int, Boolean>()
     private val eqSessions = ConcurrentHashMap<Int, Equalizer>()
     private val bassBoostSessions = ConcurrentHashMap<Int, BassBoost>()
@@ -119,6 +120,7 @@ class MasterEqEngine(
     private val hardwareEffectSessions = ConcurrentHashMap<Int, AudioEffect>()
     private val lastAppliedL = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedR = ConcurrentHashMap<Int, FloatArray>()
+    private val lastAppliedPostEq = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedPreamp = ConcurrentHashMap<Int, Float>()
     private val lastAppliedMbcKey = ConcurrentHashMap<Int, Int>()
     private val lastAppliedLimiterKey = ConcurrentHashMap<Int, Int>()
@@ -299,8 +301,6 @@ class MasterEqEngine(
                 val name = desc.name.orEmpty().lowercase(Locale.US)
                 impl.contains("qualcomm") ||
                     impl.contains("qti") ||
-                    impl.contains("xiaomi") ||
-                    impl.contains("dolby") ||
                     impl.contains("dirac") ||
                     impl.contains("mediatek") ||
                     impl.contains("mtk") ||
@@ -490,9 +490,11 @@ class MasterEqEngine(
             val currentSids = ArrayList(knownSessions)
             for (sid in currentSids) {
                 val wantNative = shouldUseNativeEqForSession(sid, params)
+                val wantPostEq = mode != EngineMode.LEGACY
                 val hasDp = dpSessions.containsKey(sid)
                 val hasEq = eqSessions.containsKey(sid)
-                val wrongEngine = (wantNative && hasDp) || (!wantNative && hasEq && !hasDp)
+                val postEqMismatch = hasDp && (dpPostEqEnabled[sid] == true) != wantPostEq
+                val wrongEngine = (wantNative && hasDp) || (!wantNative && hasEq && !hasDp) || postEqMismatch
                 if ((prevMode != mode && wrongEngine) || (sid == 0 && !isSession0HealthyInternal())) {
                     detachSessionInternal(sid)
                     attachSessionInternal(sid)
@@ -632,7 +634,6 @@ class MasterEqEngine(
         }
 
         if (!attachedWithControl) {
-            // Soft fallback so ControlStatusListener can recover once conflicting system FX releases control
             if (preferNativeEq) {
                 tryAttachNativeEqSession(sid, params, requireControl = false) ||
                     tryAttachDpSession(sid, params, requireControl = false)
@@ -641,8 +642,6 @@ class MasterEqEngine(
                     tryAttachNativeEqSession(sid, params, requireControl = false)
             }
         }
-        // In Legacy AUTO mode, also attach Native Equalizer/BassBoost/LoudnessEnhancer on global Mix 0
-        // so devices whose AudioFlinger ignores DynamicsProcessing on session 0 still apply audible EQ.
         if (sid == 0 &&
             !preferNativeEq &&
             params.legacyGlobalMixMode == LegacyGlobalMixMode.AUTO &&
@@ -674,117 +673,128 @@ class MasterEqEngine(
         val initialEnable = params.masterEnabled && !usbBitPerfectActive && !params.abxBypassCurve &&
             (requestedEngineMode.get() == EngineMode.LEGACY || !params.musicOnlyTracking || sid > 0)
 
+        val wantPrivilegedPostEq = requestedEngineMode.get() != EngineMode.LEGACY
+        val postEqOptions = if (wantPrivilegedPostEq) listOf(true, false) else listOf(false)
+
         for ((bands, useMbc) in candidates) {
-            val cfg = runCatching {
-                val cfgBuilder = DynamicsProcessing.Config.Builder(
-                    variant,
-                    2,
-                    true,
-                    bands,
-                    useMbc,
-                    if (useMbc) 6 else 0,
-                    false,
-                    0,
-                    true
-                )
-                if (params.transientMode) {
-                    runCatching { cfgBuilder.setPreferredFrameDuration(5.0f) }
-                }
-                cfgBuilder.build()
-            }.getOrNull() ?: continue
-
-            for (prio in priorities) {
-                var dp: DynamicsProcessing? = null
-                try {
-                    dp = runCatching { DynamicsProcessing(prio, sid, cfg) }.getOrNull() ?: continue
-                    val hasCtrl = runCatching { dp.hasControl() }.getOrDefault(false)
-                    if (requireControl && !hasCtrl) {
-                        runCatching { dp.release() }
-                        return false
+            for (usePostEq in postEqOptions) {
+                val cfg = runCatching {
+                    val cfgBuilder = DynamicsProcessing.Config.Builder(
+                        variant,
+                        2,
+                        true,
+                        bands,
+                        useMbc,
+                        if (useMbc) 6 else 0,
+                        usePostEq,
+                        if (usePostEq) bands else 0,
+                        true
+                    )
+                    if (params.transientMode) {
+                        runCatching { cfgBuilder.setPreferredFrameDuration(5.0f) }
                     }
+                    cfgBuilder.build()
+                }.getOrNull() ?: continue
 
-                    dp.setControlStatusListener { _, controlGranted ->
-                        if (controlGranted) {
-                            dspHandler.post {
-                                lastAppliedL.remove(sid)
-                                lastAppliedR.remove(sid)
-                                lastAppliedPreamp.remove(sid)
-                                lastAppliedMbcKey.remove(sid)
-                                lastAppliedLimiterKey.remove(sid)
-                                scheduleCoalescedUpdate()
+                for (prio in priorities) {
+                    var dp: DynamicsProcessing? = null
+                    try {
+                        dp = runCatching { DynamicsProcessing(prio, sid, cfg) }.getOrNull() ?: continue
+                        val hasCtrl = runCatching { dp.hasControl() }.getOrDefault(false)
+                        if (requireControl && !hasCtrl) {
+                            runCatching { dp.release() }
+                            return false
+                        }
+
+                        dp.setControlStatusListener { _, controlGranted ->
+                            if (controlGranted) {
+                                dspHandler.post {
+                                    lastAppliedL.remove(sid)
+                                    lastAppliedR.remove(sid)
+                                    lastAppliedPostEq.remove(sid)
+                                    lastAppliedPreamp.remove(sid)
+                                    lastAppliedMbcKey.remove(sid)
+                                    lastAppliedLimiterKey.remove(sid)
+                                    scheduleCoalescedUpdate()
+                                }
                             }
                         }
-                    }
-                    dp.setEnableStatusListener { _, isEnabled ->
-                        if (!isEnabled && desiredSessionEnabled[sid] == true) {
-                            dspHandler.post {
-                                runCatching { dpSessions[sid]?.enabled = true }
-                                scheduleCoalescedUpdate()
+                        dp.setEnableStatusListener { _, isEnabled ->
+                            if (!isEnabled && desiredSessionEnabled[sid] == true) {
+                                dspHandler.post {
+                                    runCatching { dpSessions[sid]?.enabled = true }
+                                    scheduleCoalescedUpdate()
+                                }
                             }
                         }
-                    }
 
-                    val (initCutoffs, _) = map31ToSessionBands(DoubleArray(31), bands, true)
-                    for (k in 0 until bands) {
-                        dp.setPreEqBandAllChannelsTo(k, DynamicsProcessing.EqBand(true, initCutoffs[k], 0.0f))
-                    }
-                    if (useMbc) {
-                        for (b in 0 until 6) {
-                            val mbcBand = DynamicsProcessing.MbcBand(
-                                false,
-                                Dsp.MBC_CUTOFFS[b],
-                                Dsp.MBC_ATTACK_MS[b],
-                                Dsp.MBC_RELEASE_MS[b],
-                                1.0f,
-                                0.0f,
+                        val (initCutoffs, _) = map31ToSessionBands(DoubleArray(31), bands, true)
+                        for (k in 0 until bands) {
+                            dp.setPreEqBandAllChannelsTo(k, DynamicsProcessing.EqBand(true, initCutoffs[k], 0.0f))
+                            if (usePostEq) {
+                                dp.setPostEqBandAllChannelsTo(k, DynamicsProcessing.EqBand(true, initCutoffs[k], 0.0f))
+                            }
+                        }
+                        if (useMbc) {
+                            for (b in 0 until 6) {
+                                val mbcBand = DynamicsProcessing.MbcBand(
+                                    false,
+                                    Dsp.MBC_CUTOFFS[b],
+                                    Dsp.MBC_ATTACK_MS[b],
+                                    Dsp.MBC_RELEASE_MS[b],
+                                    1.0f,
+                                    0.0f,
+                                    6.0f,
+                                    -90.0f,
+                                    1.0f,
+                                    0.0f,
+                                    0.0f
+                                )
+                                dp.setMbcBandAllChannelsTo(b, mbcBand)
+                            }
+                        }
+                        dp.setLimiterAllChannelsTo(
+                            DynamicsProcessing.Limiter(
+                                true,
+                                initialEnable && params.limiterEnabled,
+                                0,
+                                Dsp.LIM_ATTACK_MS,
+                                Dsp.LIM_RELEASE_MS,
                                 6.0f,
-                                -90.0f,
-                                1.0f,
-                                0.0f,
+                                params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f),
                                 0.0f
                             )
-                            dp.setMbcBandAllChannelsTo(b, mbcBand)
-                        }
-                    }
-                    dp.setLimiterAllChannelsTo(
-                        DynamicsProcessing.Limiter(
-                            true,
-                            initialEnable && params.limiterEnabled,
-                            0,
-                            Dsp.LIM_ATTACK_MS,
-                            Dsp.LIM_RELEASE_MS,
-                            6.0f,
-                            params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f),
-                            0.0f
                         )
-                    )
 
-                    desiredSessionEnabled[sid] = initialEnable
-                    if (hasCtrl) {
-                        val enableRc = runCatching { dp.setEnabled(initialEnable) }.getOrDefault(AudioEffect.ERROR)
-                        val isActuallyEnabled = runCatching { dp.enabled }.getOrDefault(false)
-                        if (requireControl && initialEnable && (enableRc != AudioEffect.SUCCESS || !isActuallyEnabled)) {
-                            runCatching { dp.release() }
-                            continue
+                        desiredSessionEnabled[sid] = initialEnable
+                        if (hasCtrl) {
+                            val enableRc = runCatching { dp.setEnabled(initialEnable) }.getOrDefault(AudioEffect.ERROR)
+                            val isActuallyEnabled = runCatching { dp.enabled }.getOrDefault(false)
+                            if (requireControl && initialEnable && (enableRc != AudioEffect.SUCCESS || !isActuallyEnabled)) {
+                                runCatching { dp.release() }
+                                continue
+                            }
                         }
+                        dpSessions[sid] = dp
+                        dpBandCounts[sid] = bands
+                        dpMbcEnabled[sid] = useMbc
+                        dpPostEqEnabled[sid] = usePostEq
+                        if (sid == 0 || dpBandCounts[0] == null) {
+                            currentBandCount = dpBandCounts[0] ?: bands
+                        }
+                        lastAppliedL[sid] = FloatArray(bands) { Float.NaN }
+                        lastAppliedR[sid] = FloatArray(bands) { Float.NaN }
+                        lastAppliedPostEq[sid] = FloatArray(bands) { Float.NaN }
+                        lastAppliedPreamp.remove(sid)
+                        lastAppliedMbcKey.remove(sid)
+                        lastAppliedLimiterKey.remove(sid)
+                        if (sid == 0 && hasCtrl) {
+                            session0RecoveryAttempts.set(0)
+                        }
+                        return true
+                    } catch (_: Throwable) {
+                        runCatching { dp?.release() }
                     }
-                    dpSessions[sid] = dp
-                    dpBandCounts[sid] = bands
-                    dpMbcEnabled[sid] = useMbc
-                    if (sid == 0 || dpBandCounts[0] == null) {
-                        currentBandCount = dpBandCounts[0] ?: bands
-                    }
-                    lastAppliedL[sid] = FloatArray(bands) { Float.NaN }
-                    lastAppliedR[sid] = FloatArray(bands) { Float.NaN }
-                    lastAppliedPreamp.remove(sid)
-                    lastAppliedMbcKey.remove(sid)
-                    lastAppliedLimiterKey.remove(sid)
-                    if (sid == 0 && hasCtrl) {
-                        session0RecoveryAttempts.set(0)
-                    }
-                    return true
-                } catch (_: Throwable) {
-                    runCatching { dp?.release() }
                 }
             }
         }
@@ -924,6 +934,7 @@ class MasterEqEngine(
         }
         dpBandCounts.remove(sid)
         dpMbcEnabled.remove(sid)
+        dpPostEqEnabled.remove(sid)
         desiredSessionEnabled.remove(sid)
         eqSessions.remove(sid)?.let {
             try {
@@ -963,6 +974,7 @@ class MasterEqEngine(
         }
         lastAppliedL.remove(sid)
         lastAppliedR.remove(sid)
+        lastAppliedPostEq.remove(sid)
         lastAppliedPreamp.remove(sid)
         lastAppliedMbcKey.remove(sid)
         lastAppliedLimiterKey.remove(sid)
@@ -1078,10 +1090,12 @@ class MasterEqEngine(
         val enhancerCurve31 = EnhancerDsp.computeCombinedEnhancer31(
             config = cfg,
             isSpeaker = isSpeakerRoute,
-            sampleRate = sampleRateHz
+            sampleRate = sampleRateHz,
+            userBand0Db = params.bandGains10L.getOrElse(0) { 0.0 },
+            userBand1Db = params.bandGains10L.getOrElse(1) { 0.0 }
         )
         for (i in 0 until 31) {
-            calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 15.0)
+            calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 16.0)
         }
 
         val hearingL31 = interpolateHearingTo31(params.hearingCurve, isRight = false)
@@ -1091,10 +1105,10 @@ class MasterEqEngine(
         val deepBassShiftR31 = EnhancerDsp.computeDeepBassShiftDelta31(rawRight10, cfg.deepBassEnabled)
 
         val calL = DoubleArray(31) {
-            (calCurve[it] + hearingL31[it] + deepBassShiftL31[it]).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingL31[it] + deepBassShiftL31[it]).coerceIn(-15.0, 16.0)
         }
         val calR = DoubleArray(31) {
-            (calCurve[it] + hearingR31[it] + deepBassShiftR31[it]).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingR31[it] + deepBassShiftR31[it]).coerceIn(-15.0, 16.0)
         }
 
         val targetL31 = Dsp.compute31BandTargets(
@@ -1114,6 +1128,7 @@ class MasterEqEngine(
             volMax = volMax
         )
 
+        val currentMode = requestedEngineMode.get()
         val bal = params.balanceDb.coerceIn(-6.0, 6.0)
         val trimL = if (bal > 0.0) -bal else 0.0
         val trimR = if (bal < 0.0) bal else 0.0
@@ -1133,13 +1148,27 @@ class MasterEqEngine(
             0.0
         }
         val avgPinkGain = 0.5 * (Dsp.pinkGainDb(targetL31) + Dsp.pinkGainDb(targetR31))
+        val trueBiquadPreamp = if (currentMode != EngineMode.LEGACY && params.autoGainEnabled) {
+            EnhancerDsp.computeTrueBiquadAutoPreampDb(
+                userGains10 = params.bandGains10L,
+                extraCurve31 = calL,
+                sampleRate = sampleRateHz
+            )
+        } else {
+            0.0
+        }
         val isFixedBandAutoEq = effectiveHpProfile != null && effectiveHpProfile.id.startsWith("autoeq_fb_")
         val isAutoPopulatedPreamp = (hasActiveAutoEq && abs(params.preampDb - autoEqSafePreamp) < 0.35) ||
             (isFixedBandAutoEq && params.preampDb < -0.5)
         val basePreamp = if (params.limiterEnabled) {
             val manualPreamp = if (isAutoPopulatedPreamp) 0.0 else params.preampDb.coerceIn(-12.0, 6.0)
             val loudnessMakeup = if (params.autoGainEnabled) {
-                (-avgPinkGain).coerceIn(-6.0, 6.0)
+                val pinkComp = (-avgPinkGain).coerceIn(-6.0, 6.0)
+                if (currentMode != EngineMode.LEGACY && trueBiquadPreamp < pinkComp) {
+                    (0.65 * pinkComp + 0.35 * trueBiquadPreamp).coerceIn(-9.0, 6.0)
+                } else {
+                    pinkComp
+                }
             } else if (avgPinkGain < -0.1) {
                 (-avgPinkGain).coerceIn(0.0, 4.5)
             } else {
@@ -1150,6 +1179,8 @@ class MasterEqEngine(
             val nonLimPreamp = kotlin.math.min(params.preampDb.coerceIn(-12.0, 6.0), autoEqSafePreamp)
             val loudnessMakeup = if (params.autoGainEnabled && avgPinkGain < -0.1) {
                 (-avgPinkGain).coerceIn(0.0, 3.0)
+            } else if (currentMode != EngineMode.LEGACY && params.autoGainEnabled && trueBiquadPreamp < -0.5) {
+                (trueBiquadPreamp * 0.5).coerceIn(-6.0, 0.0)
             } else {
                 0.0
             }
@@ -1169,7 +1200,6 @@ class MasterEqEngine(
             cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
         } else 0f
 
-        val currentMode = requestedEngineMode.get()
         val hasGlobalSession = dpSessions.containsKey(0) || eqSessions.containsKey(0)
 
         val effectiveLimiterCeilingDb = if (isSpeakerRoute) {
@@ -1199,6 +1229,7 @@ class MasterEqEngine(
                 if (!runCatching { dp.hasControl() }.getOrDefault(false)) {
                     lastAppliedL.remove(sid)
                     lastAppliedR.remove(sid)
+                    lastAppliedPostEq.remove(sid)
                     lastAppliedPreamp.remove(sid)
                     if (sid == 0 && currentMode == EngineMode.LEGACY && sessionEnabled) {
                         scheduleSession0Recovery()
@@ -1218,6 +1249,7 @@ class MasterEqEngine(
                 }
 
                 val sessionBands = dpBandCounts[sid] ?: if (params.compatibility10Band) 10 else 31
+                val usePostEq = dpPostEqEnabled[sid] == true
                 val (bandCutoffs, effL) = map31ToSessionBands(targetL31, sessionBands, effectiveEnabled)
                 val (_, effR) = map31ToSessionBands(targetR31, sessionBands, effectiveEnabled)
 
@@ -1250,40 +1282,113 @@ class MasterEqEngine(
                     }
                 }
 
+                if (usePostEq) {
+                    val prevPost = lastAppliedPostEq[sid]?.takeIf { it.size == sessionBands }
+                        ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedPostEq[sid] = it }
+                    val deepActive = sessionEnabled && cfg.deepBassEnabled
+                    for (k in 0 until sessionBands) {
+                        val deepStageBPost = if (!deepActive) {
+                            0.0f
+                        } else if (sessionBands >= 20) {
+                            when (k) {
+                                0 -> 3.0f
+                                1, 2 -> 2.5f
+                                3 -> 1.4f
+                                else -> 0.0f
+                            }
+                        } else {
+                            when (k) {
+                                0 -> 3.0f
+                                1 -> 2.5f
+                                else -> 0.0f
+                            }
+                        }
+                        val overflowBoost = if (sessionEnabled && effL[k] > 12.0f) {
+                            (effL[k] - 12.0f).coerceIn(0.0f, 6.0f)
+                        } else {
+                            0.0f
+                        }
+                        val postGain = (deepStageBPost + overflowBoost).coerceIn(-12.0f, 12.0f)
+                        if (prevPost[k].isNaN() || abs(prevPost[k] - postGain) >= 0.05f) {
+                            val postBand = DynamicsProcessing.EqBand(true, bandCutoffs[k], postGain)
+                            dp.setPostEqBandAllChannelsTo(k, postBand)
+                            prevPost[k] = postGain
+                        }
+                    }
+                }
+
                 if (dpMbcEnabled[sid] != false) {
                     val dialogueActive = sessionEnabled && hasDialogueMbc
-                    val mbcKey = if (dialogueActive) (cfg.dialogueAmount + 100) else 0
+                    val deepBassMbcActive = sessionEnabled && cfg.deepBassEnabled
+                    val privilegedMbcActive = sessionEnabled && currentMode != EngineMode.LEGACY
+                    val mbcKey = (if (dialogueActive) (cfg.dialogueAmount + 100) else 0) +
+                        (if (deepBassMbcActive) 1000 else 0) +
+                        (if (privilegedMbcActive) 10000 else 0)
                     if (lastAppliedMbcKey[sid] != mbcKey) {
                         for (b in 0 until 6) {
-                            val isBandActive = dialogueActive && b in 2..3
-                            val mbcBand = if (isBandActive) {
-                                DynamicsProcessing.MbcBand(
-                                    true,
-                                    Dsp.MBC_CUTOFFS[b],
-                                    2.5f,
-                                    55.0f,
-                                    1.0f + (0.5f * deFactor),
-                                    -1.5f,
-                                    8.0f,
-                                    -75.0f,
-                                    1.0f,
-                                    0.0f,
-                                    0.8f * deFactor
-                                )
-                            } else {
-                                DynamicsProcessing.MbcBand(
-                                    false,
-                                    Dsp.MBC_CUTOFFS[b],
-                                    Dsp.MBC_ATTACK_MS[b],
-                                    Dsp.MBC_RELEASE_MS[b],
-                                    1.0f,
-                                    0.0f,
-                                    6.0f,
-                                    -90.0f,
-                                    1.0f,
-                                    0.0f,
-                                    0.0f
-                                )
+                            val mbcBand = when {
+                                b == 0 && deepBassMbcActive -> {
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        Dsp.MBC_CUTOFFS[0],
+                                        35.0f,
+                                        180.0f,
+                                        2.2f,
+                                        -22.0f,
+                                        6.0f,
+                                        -60.0f,
+                                        1.15f,
+                                        1.5f,
+                                        4.0f
+                                    )
+                                }
+                                dialogueActive && b in 2..3 -> {
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        Dsp.MBC_CUTOFFS[b],
+                                        2.5f,
+                                        55.0f,
+                                        1.0f + (0.5f * deFactor),
+                                        -1.5f,
+                                        8.0f,
+                                        if (privilegedMbcActive) -45.0f else -75.0f,
+                                        if (privilegedMbcActive) 1.25f else 1.0f,
+                                        0.0f,
+                                        0.8f * deFactor + (if (privilegedMbcActive) 0.6f else 0.0f)
+                                    )
+                                }
+                                privilegedMbcActive -> {
+                                    val isBassBand = b <= 1
+                                    val isVocalPresenceBand = b in 2..4
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        Dsp.MBC_CUTOFFS[b],
+                                        if (isBassBand) 28.0f else Dsp.MBC_ATTACK_MS[b],
+                                        if (isBassBand) 160.0f else Dsp.MBC_RELEASE_MS[b],
+                                        if (isBassBand) 1.8f else 1.35f,
+                                        if (isBassBand) -18.0f else -16.0f,
+                                        6.0f,
+                                        if (isVocalPresenceBand) -45.0f else -70.0f,
+                                        if (isVocalPresenceBand) 1.2f else 1.0f,
+                                        0.0f,
+                                        if (isBassBand) 1.2f else 0.5f
+                                    )
+                                }
+                                else -> {
+                                    DynamicsProcessing.MbcBand(
+                                        false,
+                                        Dsp.MBC_CUTOFFS[b],
+                                        Dsp.MBC_ATTACK_MS[b],
+                                        Dsp.MBC_RELEASE_MS[b],
+                                        1.0f,
+                                        0.0f,
+                                        6.0f,
+                                        -90.0f,
+                                        1.0f,
+                                        0.0f,
+                                        0.0f
+                                    )
+                                }
                             }
                             dp.setMbcBandAllChannelsTo(b, mbcBand)
                         }

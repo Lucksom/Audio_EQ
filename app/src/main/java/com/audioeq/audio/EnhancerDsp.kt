@@ -169,10 +169,10 @@ object EnhancerDsp {
     )
 
     val DEEP_BASS_SHIFT_BANDS: List<DeepBassShiftBand> = listOf(
-        DeepBassShiftBand(0, 47, 0, "DC low-shelf filter with zero sub-bass roll-off"),
-        DeepBassShiftBand(1, 141, 47, "Reclaims deep sub-bass punch"),
+        DeepBassShiftBand(0, 47, 0, "Stage A: 38 Hz resonant DC low-shelf (Q=0.90, +4.5 dB offset)"),
+        DeepBassShiftBand(1, 141, 47, "Stage B: 47 Hz sub-bass fundamental peak (Q=1.15, +3.5 dB)"),
         DeepBassShiftBand(2, 234, 141, "Shifts upper-bass warmth downward"),
-        DeepBassShiftBand(3, 328, 234, "Concentrates low-mid body"),
+        DeepBassShiftBand(3, 328, 234, "210 Hz anti-mud pocket (-2.5 dB, Q=1.40) for vocal clarity"),
         DeepBassShiftBand(4, 469, 328, "Tightens lower-harmonic fundamental"),
         DeepBassShiftBand(5, 656, 469, "Increases lower-band filter density"),
         DeepBassShiftBand(6, 844, 656, "Smooths transition between bass and vocal fundamentals"),
@@ -535,61 +535,124 @@ object EnhancerDsp {
         }
     }
 
+    private fun evalRbjLowShelfDb(
+        freqHz: Double,
+        fcHz: Double,
+        gainDb: Double,
+        q: Double,
+        sampleRate: Double
+    ): Double {
+        if (abs(gainDb) < 1e-4) return 0.0
+        val a = 10.0.pow(gainDb / 40.0)
+        val omega0 = 2.0 * PI * fcHz / sampleRate
+        val cosW0 = cos(omega0)
+        val sinW0 = sin(omega0)
+        val alpha = sinW0 / (2.0 * q)
+        val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
+
+        val b0 = a * ((a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha)
+        val b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cosW0)
+        val b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - twoSqrtAAlpha)
+        val a0 = (a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha
+        val a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cosW0)
+        val a2 = (a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha
+
+        return evalNormalizedBiquadDb(freqHz, sampleRate, b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    private fun evalRbjPeakingDb(
+        freqHz: Double,
+        fcHz: Double,
+        gainDb: Double,
+        q: Double,
+        sampleRate: Double
+    ): Double {
+        if (abs(gainDb) < 1e-4) return 0.0
+        val a = 10.0.pow(gainDb / 40.0)
+        val omega0 = 2.0 * PI * fcHz / sampleRate
+        val cosW0 = cos(omega0)
+        val sinW0 = sin(omega0)
+        val alpha = sinW0 / (2.0 * q)
+
+        val b0 = 1.0 + alpha * a
+        val b1 = -2.0 * cosW0
+        val b2 = 1.0 - alpha * a
+        val a0 = 1.0 + alpha / a
+        val a1 = -2.0 * cosW0
+        val a2 = 1.0 - alpha / a
+
+        return evalNormalizedBiquadDb(freqHz, sampleRate, b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    private fun evalNormalizedBiquadDb(
+        freqHz: Double,
+        sampleRate: Double,
+        nb0: Double,
+        nb1: Double,
+        nb2: Double,
+        na1: Double,
+        na2: Double
+    ): Double {
+        val w = 2.0 * PI * freqHz / sampleRate
+        val cos1 = cos(w)
+        val sin1 = sin(w)
+        val cos2 = cos(2.0 * w)
+        val sin2 = sin(2.0 * w)
+
+        val numRe = nb0 + nb1 * cos1 + nb2 * cos2
+        val numIm = -(nb1 * sin1 + nb2 * sin2)
+        val denRe = 1.0 + na1 * cos1 + na2 * cos2
+        val denIm = -(na1 * sin1 + na2 * sin2)
+
+        val magSq = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm).coerceAtLeast(1e-12)
+        return 10.0 * log10(magSq.coerceAtLeast(1e-12))
+    }
+
     fun computeDeepBassCurve31(
         config: EnhancerConfig,
-        sampleRate: Double = 48000.0
+        sampleRate: Double = 48000.0,
+        userBand0Db: Double = 0.0,
+        userBand1Db: Double = 0.0
     ): DoubleArray {
         val result = DoubleArray(31)
         val active = config.deepBassEnabled
         if (!active) return result
 
-        val shelfGainDb = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
-            config.bassBoostDb.toDouble().coerceIn(2.5, 6.0)
+        val driveScale = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
+            (config.bassBoostDb.toDouble() / 4.5).coerceIn(0.65, 1.35)
         } else {
-            4.5
+            1.0
         }
 
-        val fc = 35.0
-        val q = 0.70710678
-        val a = 10.0.pow(shelfGainDb / 40.0)
-        val omegaC = 2.0 * PI * fc / sampleRate
-        val cosW = cos(omegaC)
-        val sinW = sin(omegaC)
-        val alpha = sinW / (2.0 * q)
-        val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
-
-        val b0 = a * ((a + 1.0) - (a - 1.0) * cosW + twoSqrtAAlpha)
-        val b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cosW)
-        val b2 = a * ((a + 1.0) - (a - 1.0) * cosW - twoSqrtAAlpha)
-        val a0 = (a + 1.0) + (a - 1.0) * cosW + twoSqrtAAlpha
-        val a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cosW)
-        val a2 = (a + 1.0) + (a - 1.0) * cosW - twoSqrtAAlpha
-
-        val nb0 = b0 / a0
-        val nb1 = b1 / a0
-        val nb2 = b2 / a0
-        val na1 = a1 / a0
-        val na2 = a2 / a0
+        val g0ShelfDb = (userBand0Db.coerceIn(-6.0, 6.0) * 0.55 + 4.8 * driveScale).coerceIn(2.5, 9.5)
+        val g1PeakDb = (userBand1Db.coerceIn(-6.0, 6.0) * 0.55 + 3.8 * driveScale).coerceIn(2.0, 8.0)
+        val gMudCutDb = (-2.5 * driveScale).coerceIn(-3.5, -1.5)
 
         val freqs = EqConstants.BAND_FREQUENCIES_31
         for (i in 0 until 31) {
             val f = freqs[i]
-            val w = 2.0 * PI * f / sampleRate
-            val cos1 = cos(w)
-            val sin1 = sin(w)
-            val cos2 = cos(2.0 * w)
-            val sin2 = sin(2.0 * w)
-
-            val numRe = nb0 + nb1 * cos1 + nb2 * cos2
-            val numIm = -(nb1 * sin1 + nb2 * sin2)
-            val denRe = 1.0 + na1 * cos1 + na2 * cos2
-            val denIm = -(na1 * sin1 + na2 * sin2)
-
-            val magSq = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm).coerceAtLeast(1e-12)
-            val dcShelfDb = 10.0 * log10(magSq.coerceAtLeast(1e-12))
-
-            val logShiftReinforcement = 1.35 * exp(-0.5 * (ln(f / 47.0) / 0.55).pow(2.0))
-            result[i] = (dcShelfDb + logShiftReinforcement).coerceIn(0.0, 6.5)
+            val stageADb = evalRbjLowShelfDb(
+                freqHz = f,
+                fcHz = 38.0,
+                gainDb = g0ShelfDb,
+                q = 0.90,
+                sampleRate = sampleRate
+            )
+            val stageBDb = evalRbjPeakingDb(
+                freqHz = f,
+                fcHz = 47.0,
+                gainDb = g1PeakDb,
+                q = 1.15,
+                sampleRate = sampleRate
+            )
+            val stageMudCutDb = evalRbjPeakingDb(
+                freqHz = f,
+                fcHz = 210.0,
+                gainDb = gMudCutDb,
+                q = 1.40,
+                sampleRate = sampleRate
+            )
+            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-3.5, 9.5)
         }
         return result
     }
@@ -817,9 +880,11 @@ object EnhancerDsp {
     fun computeCombinedEnhancer31(
         config: EnhancerConfig,
         isSpeaker: Boolean = false,
-        sampleRate: Double = 48000.0
+        sampleRate: Double = 48000.0,
+        userBand0Db: Double = 0.0,
+        userBand1Db: Double = 0.0
     ): DoubleArray {
-        val deepBass = computeDeepBassCurve31(config, sampleRate)
+        val deepBass = computeDeepBassCurve31(config, sampleRate, userBand0Db, userBand1Db)
         val bass = computeBassEnhancer31(config)
         val virtBass = computeVirtualBass31(config)
         val ieq = computeIeq31(config)
@@ -828,8 +893,42 @@ object EnhancerDsp {
         val surr = computeSurroundContour31(config, isSpeaker, sampleRate)
 
         return DoubleArray(31) { i ->
-            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 14.0)
+            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 16.0)
         }
+    }
+
+    fun computeTrueBiquadAutoPreampDb(
+        userGains10: DoubleArray,
+        extraCurve31: DoubleArray? = null,
+        sampleRate: Double = 48000.0,
+        safetyMarginDb: Double = 0.5
+    ): Double {
+        val freqs10 = EqConstants.BAND_FREQUENCIES_10
+        val freqs31 = EqConstants.BAND_FREQUENCIES_31
+        var maxGainDb = 0.0
+        for (p in 0 until 64) {
+            val probeFreq = 20.0 * (1000.0).pow(p.toDouble() / 63.0)
+            var totalDbAtProbe = 0.0
+            for (b in 0 until minOf(10, userGains10.size)) {
+                val g = userGains10[b]
+                if (abs(g) < 0.05) continue
+                totalDbAtProbe += evalRbjPeakingDb(
+                    freqHz = probeFreq,
+                    fcHz = freqs10[b],
+                    gainDb = g,
+                    q = 1.414,
+                    sampleRate = sampleRate
+                )
+            }
+            if (extraCurve31 != null && extraCurve31.size == 31) {
+                val nearestIdx = freqs31.indices.minByOrNull { abs(ln(freqs31[it]) - ln(probeFreq)) } ?: 0
+                totalDbAtProbe += extraCurve31[nearestIdx]
+            }
+            if (totalDbAtProbe > maxGainDb) {
+                maxGainDb = totalDbAtProbe
+            }
+        }
+        return if (maxGainDb > 0.0) -(maxGainDb + safetyMarginDb) else 0.0
     }
 
     private fun interpolateLog20(freqHz: Double, gains20: DoubleArray, freqs20: IntArray = IEQ_FREQS_20): Double {

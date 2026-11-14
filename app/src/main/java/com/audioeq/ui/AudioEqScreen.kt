@@ -326,6 +326,7 @@ fun AudioEqScreen(
             onToggleUsbBitPerfect = viewModel::setUsbBitPerfectEnabled,
             onToggleCompatibility10Band = viewModel::setCompatibility10Band,
             onToggleTransientMode = viewModel::setTransientMode,
+            onToggleBtAbsVol = viewModel::toggleBluetoothAbsoluteVolume,
             onToggleMusicOnlyTracking = viewModel::setMusicOnlyTrackingEnabled,
             onToggleMusicPackage = viewModel::toggleMusicPackage,
             onAddCustomMusicPackage = viewModel::addCustomMusicPackage,

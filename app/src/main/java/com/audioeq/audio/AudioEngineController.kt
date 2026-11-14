@@ -56,11 +56,11 @@ data class DeviceDiagnostics(
     val systemEqConflictResolved: Boolean = false,
     val vendorOffloadEqualizerDetected: Boolean = false,
     val session0ControlActive: Boolean = false,
-    val legacyEngineSummary: String = "Initializing"
+    val legacyEngineSummary: String = "Initializing",
+    val btDisableAbsVolActive: Boolean = false
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
-    val btDisableAbsVolActive: Boolean get() = false
 }
 
 class AudioEngineController(
@@ -93,6 +93,8 @@ class AudioEngineController(
     private var currentSampleRateHz: Int = 48000
     @Volatile
     private var systemEqResolved: Boolean = false
+    @Volatile
+    private var btAbsVolDisabledState: Boolean = false
 
     val midSideProcessor = MidSideProcessor(48000)
 
@@ -195,9 +197,17 @@ class AudioEngineController(
             )
             masterEngine.syncDiscoveredSessions(sessions)
             currentSampleRateHz = shizukuManager.readHardwareSampleRateHz()
-            if (mode == EngineMode.ROOT && !systemEqResolved) {
-                systemEqResolved = shizukuManager.resolveSystemEqConflictIfRoot()
+            if (!systemEqResolved) {
+                val stopped = shizukuManager.stopCompetingSystemAudioEffects()
+                val safeVol = shizukuManager.bypassSafeMediaVolumeCap()
+                val rootOpt = if (mode == EngineMode.ROOT) {
+                    shizukuManager.applyRootAudioFlingerOptimizations()
+                } else {
+                    false
+                }
+                systemEqResolved = stopped || safeVol || rootOpt
             }
+            btAbsVolDisabledState = shizukuManager.isBluetoothAbsoluteVolumeDisabled()
             if (currentRoute == OutputRoute.BLUETOOTH) {
                 currentBluetoothCodec = shizukuManager.readBluetoothCodecSummary()
             } else {
@@ -210,7 +220,6 @@ class AudioEngineController(
             currentSampleRateHz = 48000
             currentBluetoothCodec = null
         } else {
-            // EngineMode.LEGACY: combine broadcast/external sessions, non-prompting dumpsys discovery if available, and Global Mix 0
             val legacySids = LinkedHashSet<Int>()
             val canSilentDiscover = hasDumpPermission() ||
                 shizukuManager.state.value == ShizukuState.READY ||
@@ -298,13 +307,20 @@ class AudioEngineController(
         val prevMusicOnly = latestRenderParams.musicOnlyTracking
         currentEngineMode = mode
         if (prevMode != mode || prevMusicOnly != musicOnlyTracking) {
+            if (prevMode != mode) {
+                systemEqResolved = false
+            }
             masterEngine.setEngineMode(mode, isPrivilegeReadyForMode(mode))
             triggerImmediateSessionSync()
         }
         midSideProcessor.updateParameters(
             width = midSideWidth,
             vocalBoost = vocalPresenceBoost,
-            sampleRate = 48000
+            sampleRate = currentSampleRateHz.coerceIn(44100, 192000),
+            deepBassEnabled = enhancerConfig.deepBassEnabled && masterEnabled && !abxBypassCurve,
+            deepBassBoostDb = if (enhancerConfig.bassEnabled) enhancerConfig.bassBoostDb else 0f,
+            userBand0Db = bandGainsDb.getOrElse(0) { 0f },
+            userBand1Db = bandGainsDb.getOrElse(1) { 0f }
         )
 
         val l10 = DoubleArray(10) { bandGainsDb.getOrElse(it) { 0f }.toDouble() }
@@ -396,10 +412,23 @@ class AudioEngineController(
             systemEqConflictResolved = systemEqResolved,
             vendorOffloadEqualizerDetected = masterEngine.vendorOffloadEqualizerDetected,
             session0ControlActive = masterEngine.hasSession0Control(),
-            legacyEngineSummary = masterEngine.getLegacyEngineSummary()
+            legacyEngineSummary = masterEngine.getLegacyEngineSummary(),
+            btDisableAbsVolActive = btAbsVolDisabledState
         )
         if (_diagnostics.value != newDiag) {
             _diagnostics.value = newDiag
+        }
+    }
+
+    fun setBluetoothAbsoluteVolumeDisabled(disabled: Boolean) {
+        controllerScope.launch {
+            val ok = shizukuManager.setBluetoothAbsoluteVolumeDisabled(disabled)
+            if (ok) {
+                btAbsVolDisabledState = disabled
+            } else {
+                btAbsVolDisabledState = shizukuManager.isBluetoothAbsoluteVolumeDisabled()
+            }
+            refreshDiagnostics()
         }
     }
 
