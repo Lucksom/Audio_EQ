@@ -1049,11 +1049,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDeepBassEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextBoost = if (enabled && cur.bassBoostDb < 2.5f) 4.5f else cur.bassBoostDb
             cur.copy(
-                deepBassEnabled = enabled,
-                bassEnabled = if (enabled) true else cur.bassEnabled,
-                bassBoostDb = nextBoost
+                deepBassEnabled = enabled
             )
         }
     }
@@ -1095,7 +1092,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             val nextDb = if (enabled && cur.bassBoostDb < 0.5f) 3.5f else cur.bassBoostDb
             cur.copy(
                 bassEnabled = enabled,
-                bassBoostDb = nextDb
+                bassBoostDb = nextDb,
+                subwooferEnabled = if (enabled) false else cur.subwooferEnabled
             )
         }
     }
@@ -1106,10 +1104,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBassBoostDb(db: Float) {
         val clamped = db.coerceIn(0f, 6f)
+        val active = clamped > 0.05f
         repository.updateEnhancerConfig { cur ->
             cur.copy(
-                bassEnabled = clamped > 0.05f,
-                bassBoostDb = clamped
+                bassEnabled = active,
+                bassBoostDb = clamped,
+                subwooferEnabled = if (active) false else cur.subwooferEnabled
             )
         }
     }
@@ -1159,17 +1159,20 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             val nextIntensity = if (enabled && cur.subwooferIntensity < 0.05f) 0.85f else cur.subwooferIntensity
             cur.copy(
                 subwooferEnabled = enabled,
-                subwooferIntensity = nextIntensity
+                subwooferIntensity = nextIntensity,
+                bassEnabled = if (enabled) false else cur.bassEnabled
             )
         }
     }
 
     fun setSubwooferIntensity(intensity: Float) {
         val clamped = intensity.coerceIn(0f, 1.5f)
+        val active = clamped > 0.02f
         repository.updateEnhancerConfig { cur ->
             cur.copy(
-                subwooferEnabled = clamped > 0.02f,
-                subwooferIntensity = clamped
+                subwooferEnabled = active,
+                subwooferIntensity = clamped,
+                bassEnabled = if (active) false else cur.bassEnabled
             )
         }
     }
