@@ -338,6 +338,7 @@ class AudioEqUnitTest {
         val bass31 = EnhancerDsp.computeBassEnhancer31(maxBassCfg)
         assertEquals(31, bass31.size)
         assertTrue("Bass Enhancer 31-band curve must never exceed 6.0 dB", bass31.all { it in 0.0..6.0 })
+        assertTrue("Bass Enhancer at 6.0 dB must deliver full 6.0 dB punch in 31.5-63 Hz zone", bass31[3] >= 5.8 && bass31[4] >= 5.8)
         for (i in 17 until 31) {
             assertTrue("Bass enhancer must not attenuate mids/treble", bass31[i] >= 0.0)
         }
@@ -474,5 +475,45 @@ class AudioEqUnitTest {
             sampleRate = 48000.0
         )
         assertTrue("True biquad auto-preamp must attenuate overlapping sub-bass boosts", autoPreamp < -6.0)
+    }
+
+    @Test
+    fun verifyUltimateSubwooferCurveExcursionGuardPortSpikeAndTrunkMudCarve() {
+        val subCfg = EnhancerConfig(
+            subwooferEnabled = true,
+            subwooferIntensity = 1.0f,
+            subwooferSubOctaveMix = 0.40f,
+            subwooferAutoLoudness = true
+        )
+        val lowVolCurve = EnhancerDsp.computeSubwooferCurve31(subCfg, volumeRatio = 0.25f)
+        val highVolCurve = EnhancerDsp.computeSubwooferCurve31(subCfg, volumeRatio = 0.95f)
+
+        assertEquals(31, lowVolCurve.size)
+        assertTrue("20 Hz Infrasonic Excursion Guard must cut <22 Hz sub-cone energy", lowVolCurve[0] < -5.5)
+        assertTrue("40 Hz Helmholtz port resonance must exceed +8 dB", lowVolCurve[3] > 8.0)
+        assertTrue("200 Hz Trunk Isolation Carve must cut lower-midrange mud (< -4.0 dB)", lowVolCurve[10] < -4.0)
+        assertTrue(
+            "Fletcher-Munson equal-loudness must boost 40 Hz sub-port harder at low volume",
+            lowVolCurve[3] > highVolCurve[3] + 1.0
+        )
+
+        val processor = MidSideProcessor(48000)
+        processor.updateParameters(
+            width = 1.15f,
+            vocalBoost = 0.2f,
+            sampleRate = 48000,
+            subwooferEnabled = true,
+            subwooferIntensity = 1.0f,
+            subwooferSubOctaveMix = 0.40f,
+            subwooferAutoLoudness = true,
+            volumeRatio = 0.4f
+        )
+        val pcm = ShortArray(512) { idx ->
+            val phase = (idx / 2) * 0.09
+            val sample = (kotlin.math.sin(phase) * 14000.0).toInt()
+            if (idx % 2 == 0) sample.toShort() else sample.toShort()
+        }
+        processor.processInterleavedPcm16(pcm, pcm.size)
+        assertTrue("Subwoofer-processed PCM must contain non-zero samples", pcm.any { it.toInt() != 0 })
     }
 }

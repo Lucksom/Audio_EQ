@@ -42,6 +42,7 @@ import com.audioeq.ui.components.SavePresetDialog
 import com.audioeq.ui.components.SettingsAndDiagnosticsSheet
 import com.audioeq.ui.components.SoundCalibrationSheet
 import com.audioeq.ui.components.StatusBanner
+import com.audioeq.ui.components.SubwooferCard
 import com.audioeq.ui.components.ToneCard
 import com.audioeq.ui.components.TopBarHeader
 import com.audioeq.ui.theme.LocalMonetPalette
@@ -230,6 +231,17 @@ fun AudioEqScreen(
                         onClearAutoEq = viewModel::clearAutoEqProfile,
                         onDismissSuggestion = viewModel::dismissSuggestedAutoEq,
                         onRefreshDatabase = viewModel::refreshAutoEqDatabase
+                    )
+                }
+
+                item {
+                    SubwooferCard(
+                        config = uiState.enhancerConfig,
+                        enabled = uiState.masterEnabled,
+                        onToggleSubwoofer = viewModel::setSubwooferEnabled,
+                        onSubwooferIntensityChange = viewModel::setSubwooferIntensity,
+                        onSubwooferSubOctaveChange = viewModel::setSubwooferSubOctaveMix,
+                        onToggleSubwooferAutoLoudness = viewModel::setSubwooferAutoLoudness
                     )
                 }
 

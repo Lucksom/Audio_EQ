@@ -1154,6 +1154,43 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setSubwooferEnabled(enabled: Boolean) {
+        repository.updateEnhancerConfig { cur ->
+            val nextIntensity = if (enabled && cur.subwooferIntensity < 0.05f) 0.85f else cur.subwooferIntensity
+            cur.copy(
+                subwooferEnabled = enabled,
+                subwooferIntensity = nextIntensity
+            )
+        }
+    }
+
+    fun setSubwooferIntensity(intensity: Float) {
+        val clamped = intensity.coerceIn(0f, 1.5f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferEnabled = clamped > 0.02f,
+                subwooferIntensity = clamped
+            )
+        }
+    }
+
+    fun setSubwooferSubOctaveMix(mix: Float) {
+        val clamped = mix.coerceIn(0f, 0.6f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferSubOctaveMix = clamped
+            )
+        }
+    }
+
+    fun setSubwooferAutoLoudness(enabled: Boolean) {
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferAutoLoudness = enabled
+            )
+        }
+    }
+
     fun resetEnhancers() {
         repository.updateEnhancerConfig {
             EnhancerConfig()

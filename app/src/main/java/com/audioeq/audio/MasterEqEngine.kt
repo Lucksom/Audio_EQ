@@ -243,7 +243,8 @@ class MasterEqEngine(
         override fun onReceive(ctx: Context, intent: Intent) {
             when (intent.action) {
                 "android.media.VOLUME_CHANGED_ACTION" -> {
-                    if (latestParams.get().iso226Enabled) {
+                    val p = latestParams.get()
+                    if (p.iso226Enabled || p.enhancerConfig.subwooferEnabled || p.enhancerConfig.bassEnabled) {
                         scheduleCoalescedUpdate()
                     }
                 }
@@ -673,8 +674,7 @@ class MasterEqEngine(
         val initialEnable = params.masterEnabled && !usbBitPerfectActive && !params.abxBypassCurve &&
             (requestedEngineMode.get() == EngineMode.LEGACY || !params.musicOnlyTracking || sid > 0)
 
-        val wantPrivilegedPostEq = requestedEngineMode.get() != EngineMode.LEGACY
-        val postEqOptions = if (wantPrivilegedPostEq) listOf(true, false) else listOf(false)
+        val postEqOptions = listOf(true, false)
 
         for ((bands, useMbc) in candidates) {
             for (usePostEq in postEqOptions) {
@@ -1087,12 +1087,14 @@ class MasterEqEngine(
         )
         val sampleRateHz = params.hardwareSampleRateHz.coerceIn(44100, 192000).toDouble()
 
+        val currentVolumeRatio = (volIdx.toFloat() / volMax.toFloat()).coerceIn(0.1f, 1.0f)
         val enhancerCurve31 = EnhancerDsp.computeCombinedEnhancer31(
             config = cfg,
             isSpeaker = isSpeakerRoute,
             sampleRate = sampleRateHz,
             userBand0Db = params.bandGains10L.getOrElse(0) { 0.0 },
-            userBand1Db = params.bandGains10L.getOrElse(1) { 0.0 }
+            userBand1Db = params.bandGains10L.getOrElse(1) { 0.0 },
+            volumeRatio = currentVolumeRatio
         )
         for (i in 0 until 31) {
             calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 16.0)
@@ -1147,11 +1149,28 @@ class MasterEqEngine(
         } else {
             0.0
         }
-        val avgPinkGain = 0.5 * (Dsp.pinkGainDb(targetL31) + Dsp.pinkGainDb(targetR31))
+        val intentionalBassLiftActive = (cfg.bassEnabled && cfg.bassBoostDb > 0.05f) ||
+            cfg.deepBassEnabled ||
+            (cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f)
+        val pinkTargetL31 = if (intentionalBassLiftActive) {
+            DoubleArray(31) { k ->
+                if (k <= 8) minOf(targetL31[k], params.bandGains10L.getOrElse(if (k <= 4) 0 else 1) { 0.0 }) else targetL31[k]
+            }
+        } else {
+            targetL31
+        }
+        val pinkTargetR31 = if (intentionalBassLiftActive) {
+            DoubleArray(31) { k ->
+                if (k <= 8) minOf(targetR31[k], rawRight10.getOrElse(if (k <= 4) 0 else 1) { 0.0 }) else targetR31[k]
+            }
+        } else {
+            targetR31
+        }
+        val avgPinkGain = 0.5 * (Dsp.pinkGainDb(pinkTargetL31) + Dsp.pinkGainDb(pinkTargetR31))
         val trueBiquadPreamp = if (currentMode != EngineMode.LEGACY && params.autoGainEnabled) {
             EnhancerDsp.computeTrueBiquadAutoPreampDb(
                 userGains10 = params.bandGains10L,
-                extraCurve31 = calL,
+                extraCurve31 = if (intentionalBassLiftActive) null else calL,
                 sampleRate = sampleRateHz
             )
         } else {
@@ -1286,6 +1305,13 @@ class MasterEqEngine(
                     val prevPost = lastAppliedPostEq[sid]?.takeIf { it.size == sessionBands }
                         ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedPostEq[sid] = it }
                     val deepActive = sessionEnabled && cfg.deepBassEnabled
+                    val bassActive = sessionEnabled && cfg.bassEnabled && cfg.bassBoostDb > 0.05f
+                    val bassPostScale = if (bassActive) (cfg.bassBoostDb / 6.0f).coerceIn(0f, 1f) else 0f
+                    val subActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
+                    val wInt = if (subActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
+                    val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
+                    val subEff = wInt * subLoudness
+
                     for (k in 0 until sessionBands) {
                         val deepStageBPost = if (!deepActive) {
                             0.0f
@@ -1303,12 +1329,47 @@ class MasterEqEngine(
                                 else -> 0.0f
                             }
                         }
+                        val bassEnhancerPost = if (!bassActive) {
+                            0.0f
+                        } else if (sessionBands >= 20) {
+                            when (k) {
+                                1, 2 -> 3.2f * bassPostScale
+                                3, 4 -> 2.6f * bassPostScale
+                                5 -> 1.5f * bassPostScale
+                                else -> 0.0f
+                            }
+                        } else {
+                            when (k) {
+                                0 -> 3.2f * bassPostScale
+                                1 -> 2.2f * bassPostScale
+                                else -> 0.0f
+                            }
+                        }
+                        val subwooferPost = if (!subActive) {
+                            0.0f
+                        } else if (sessionBands >= 20) {
+                            when (k) {
+                                0 -> -4.0f * wInt
+                                2 -> 3.5f * subEff
+                                3 -> 4.5f * subEff
+                                4 -> 3.5f * subEff
+                                10 -> -2.0f * wInt
+                                else -> 0.0f
+                            }
+                        } else {
+                            when (k) {
+                                0 -> 3.8f * subEff
+                                1 -> 2.5f * subEff
+                                3 -> -2.0f * wInt
+                                else -> 0.0f
+                            }
+                        }
                         val overflowBoost = if (sessionEnabled && effL[k] > 12.0f) {
                             (effL[k] - 12.0f).coerceIn(0.0f, 6.0f)
                         } else {
                             0.0f
                         }
-                        val postGain = (deepStageBPost + overflowBoost).coerceIn(-12.0f, 12.0f)
+                        val postGain = (deepStageBPost + bassEnhancerPost + subwooferPost + overflowBoost).coerceIn(-12.0f, 12.0f)
                         if (prevPost[k].isNaN() || abs(prevPost[k] - postGain) >= 0.05f) {
                             val postBand = DynamicsProcessing.EqBand(true, bandCutoffs[k], postGain)
                             dp.setPostEqBandAllChannelsTo(k, postBand)
@@ -1320,26 +1381,100 @@ class MasterEqEngine(
                 if (dpMbcEnabled[sid] != false) {
                     val dialogueActive = sessionEnabled && hasDialogueMbc
                     val deepBassMbcActive = sessionEnabled && cfg.deepBassEnabled
+                    val bassMbcActive = sessionEnabled && cfg.bassEnabled && cfg.bassBoostDb > 0.05f
+                    val bassNorm = if (bassMbcActive) (cfg.bassBoostDb / 6.0f).coerceIn(0f, 1f) else 0f
+                    val subMbcActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
+                    val wInt = if (subMbcActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
+                    val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
+                    val subEff = wInt * subLoudness
                     val privilegedMbcActive = sessionEnabled && currentMode != EngineMode.LEGACY
                     val mbcKey = (if (dialogueActive) (cfg.dialogueAmount + 100) else 0) +
                         (if (deepBassMbcActive) 1000 else 0) +
+                        (if (bassMbcActive) ((cfg.bassBoostDb * 10f).roundToInt() * 2000) else 0) +
+                        (if (subMbcActive) ((subEff * 20f).roundToInt() * 50000) else 0) +
                         (if (privilegedMbcActive) 10000 else 0)
                     if (lastAppliedMbcKey[sid] != mbcKey) {
                         for (b in 0 until 6) {
                             val mbcBand = when {
-                                b == 0 && deepBassMbcActive -> {
+                                b == 0 && subMbcActive -> {
+                                    val extraBassPre = if (bassMbcActive) 1.5f * bassNorm else 0.0f
+                                    val extraBassPost = if (bassMbcActive) 2.5f * bassNorm else 0.0f
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        58.0f,
+                                        55.0f,
+                                        260.0f,
+                                        2.2f,
+                                        -22.0f,
+                                        8.0f,
+                                        -58.0f,
+                                        1.35f,
+                                        2.5f * subEff + extraBassPre,
+                                        5.5f * subEff + extraBassPost
+                                    )
+                                }
+                                b == 1 && subMbcActive -> {
+                                    val extraBassPre = if (bassMbcActive) 1.0f * bassNorm else 0.0f
+                                    val extraBassPost = if (bassMbcActive) 2.0f * bassNorm else 0.0f
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        135.0f,
+                                        25.0f,
+                                        110.0f,
+                                        2.5f,
+                                        -18.0f,
+                                        6.0f,
+                                        -55.0f,
+                                        1.15f,
+                                        1.5f * subEff + extraBassPre,
+                                        3.0f * subEff + extraBassPost
+                                    )
+                                }
+                                b == 2 && subMbcActive -> {
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        320.0f,
+                                        8.0f,
+                                        90.0f,
+                                        3.0f,
+                                        -16.0f,
+                                        4.0f,
+                                        -60.0f,
+                                        1.0f,
+                                        0.0f,
+                                        -2.5f * wInt
+                                    )
+                                }
+                                b == 0 && (deepBassMbcActive || bassMbcActive) -> {
+                                    val preDb = (if (deepBassMbcActive) 1.5f else 0f) + (2.2f * bassNorm)
+                                    val postDb = (if (deepBassMbcActive) 4.0f else 0f) + (4.5f * bassNorm)
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         Dsp.MBC_CUTOFFS[0],
-                                        35.0f,
+                                        32.0f,
                                         180.0f,
                                         2.2f,
                                         -22.0f,
                                         6.0f,
                                         -60.0f,
+                                        1.25f,
+                                        preDb.coerceIn(0f, 5.0f),
+                                        postDb.coerceIn(0f, 7.5f)
+                                    )
+                                }
+                                b == 1 && bassMbcActive -> {
+                                    DynamicsProcessing.MbcBand(
+                                        true,
+                                        Dsp.MBC_CUTOFFS[1],
+                                        24.0f,
+                                        120.0f,
+                                        2.0f,
+                                        -19.0f,
+                                        6.0f,
+                                        -58.0f,
                                         1.15f,
-                                        1.5f,
-                                        4.0f
+                                        1.2f * bassNorm,
+                                        2.8f * bassNorm
                                     )
                                 }
                                 dialogueActive && b in 2..3 -> {
@@ -1572,11 +1707,12 @@ class MasterEqEngine(
             }
         }
 
-        val desiredBassStrength = if (effectiveEnabled && (cfg.bassEnabled || cfg.deepBassEnabled || params.tiltBassDb > 0.5 || endpointSpec.virtualBassAuto)) {
-            val rawBass = (if (cfg.bassEnabled) cfg.bassBoostDb * 105f else 0f) +
-                (if (cfg.deepBassEnabled) 180f else 0f) +
-                (if (params.tiltBassDb > 0.5) (params.tiltBassDb * 45.0).toFloat() else 0f) +
-                (if (cfg.profile != AudioProfile.OFF && endpointSpec.virtualBassAuto) 120f else 0f)
+        val desiredBassStrength = if (effectiveEnabled && (cfg.bassEnabled || cfg.deepBassEnabled || cfg.subwooferEnabled || params.tiltBassDb > 0.5 || endpointSpec.virtualBassAuto)) {
+            val rawBass = (if (cfg.bassEnabled) cfg.bassBoostDb * 166f else 0f) +
+                (if (cfg.deepBassEnabled) 240f else 0f) +
+                (if (cfg.subwooferEnabled) cfg.subwooferIntensity * 650f else 0f) +
+                (if (params.tiltBassDb > 0.5) (params.tiltBassDb * 60.0).toFloat() else 0f) +
+                (if (cfg.profile != AudioProfile.OFF && endpointSpec.virtualBassAuto) 150f else 0f)
             rawBass.roundToInt().coerceIn(0, 1000)
         } else {
             0

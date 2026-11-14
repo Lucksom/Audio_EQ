@@ -386,7 +386,7 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.Speaker,
                 title = "Bass Enhancer",
-                subtitle = "Butterworth low-shelf + sub-bass punch bell (zero mid/treble volume suppression)",
+                subtitle = "Full-power 0–6 dB low-shelf + dynamic MBC transient punch (zero volume ducking)",
                 badgeText = if (config.bassEnabled) {
                     String.format(Locale.US, "+%.1f dB", config.bassBoostDb)
                 } else "OFF",
@@ -939,6 +939,370 @@ private fun EnhancerModuleContainer(
                 exit = shrinkVertically() + fadeOut()
             ) {
                 content()
+            }
+        }
+    }
+}
+
+@Composable
+fun SubwooferCard(
+    config: EnhancerConfig,
+    enabled: Boolean = true,
+    onToggleSubwoofer: (Boolean) -> Unit = {},
+    onSubwooferIntensityChange: (Float) -> Unit = {},
+    onSubwooferSubOctaveChange: (Float) -> Unit = {},
+    onToggleSubwooferAutoLoudness: (Boolean) -> Unit = {}
+) {
+    val palette = LocalMonetPalette.current
+    var showSubwooferInfo by remember { mutableStateOf(false) }
+    val subActive = config.subwooferEnabled
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("subwoofer_card"),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = palette.bgCard),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (subActive) palette.primary.copy(alpha = 0.55f) else palette.borderSubtle
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (subActive) palette.primaryContainer else palette.surface2),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Speaker,
+                            contentDescription = "Subwoofer Engine",
+                            tint = if (subActive) palette.onPrimaryContainer else palette.textMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Subwoofer",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.textPrimary
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = if (subActive) palette.primaryContainer else palette.surface2
+                            ) {
+                                Text(
+                                    text = if (subActive) {
+                                        "${(config.subwooferIntensity * 100).roundToInt()}% SLAM"
+                                    } else "OFF",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (subActive) palette.onPrimaryContainer else palette.textMuted,
+                                        fontSize = 10.sp
+                                    ),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        Text(
+                            text = "38/48 Hz Dual Helmholtz Port · 58/135 Hz Dual-Chamber MBC · LR4 Sub-Octave",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = palette.textMuted,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Switch(
+                    checked = subActive,
+                    onCheckedChange = onToggleSubwoofer,
+                    enabled = enabled,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = palette.onPrimary,
+                        checkedTrackColor = palette.primary,
+                        uncheckedThumbColor = palette.textMuted,
+                        uncheckedTrackColor = palette.surface2
+                    ),
+                    modifier = Modifier.testTag("subwoofer_master_switch")
+                )
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = palette.surface1,
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (subActive) palette.primary.copy(alpha = 0.45f) else palette.borderSubtle
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Cabinet Drive & Port Slam (38 Hz / 48 Hz)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "%d%% (+%.1f dB)",
+                                    (config.subwooferIntensity * 100).roundToInt(),
+                                    config.subwooferIntensity * 8.0f
+                                ),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                ),
+                                maxLines = 1
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferIntensity.coerceIn(0f, 1.5f),
+                            onValueChange = onSubwooferIntensityChange,
+                            valueRange = 0f..1.5f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_intensity_slider")
+                        )
+                    }
+
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Sub-Octave Synthesizer (f/2 Fundamental)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "${(config.subwooferSubOctaveMix * 100).roundToInt()}% Mix",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                ),
+                                maxLines = 1
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferSubOctaveMix.coerceIn(0f, 0.6f),
+                            onValueChange = onSubwooferSubOctaveChange,
+                            valueRange = 0f..0.6f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_sub_octave_slider")
+                        )
+                    }
+
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                        ) {
+                            Text(
+                                text = "Fletcher-Munson Equal-Loudness",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textPrimary
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Automatically scales sub-port pressure at lower media volume",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = palette.textMuted,
+                                    fontSize = 11.sp
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Switch(
+                            checked = config.subwooferAutoLoudness,
+                            onCheckedChange = onToggleSubwooferAutoLoudness,
+                            enabled = enabled && subActive,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = palette.onPrimary,
+                                checkedTrackColor = palette.primary,
+                                uncheckedThumbColor = palette.textMuted,
+                                uncheckedTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier.testTag("subwoofer_loudness_switch")
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "22 Hz LR4 Excursion Guard · 185/240 Hz Trunk Isolation Carve",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = palette.textMuted,
+                                fontSize = 10.sp
+                            ),
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (showSubwooferInfo) "Hide specs" else "Architecture",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = palette.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { showSubwooferInfo = !showSubwooferInfo }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .testTag("subwoofer_info_toggle")
+                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = showSubwooferInfo,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = palette.surface2.copy(alpha = 0.8f),
+                            border = BorderStroke(1.dp, palette.borderSubtle)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "5-Stage Physical Subwoofer Architecture:",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.primary
+                                    )
+                                )
+                                Text(
+                                    text = "• 24 dB/oct Infrasonic Excursion Guard (22 Hz): Blocks inaudible <20 Hz DC cone-flapping to preserve driver headroom.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = "• Dual-Stage Helmholtz Ported Cabinet: 38 Hz (Q=1.85) deep air resonance + 48 Hz (Q=1.40) physical chest slam.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = "• Dual-Chamber Subwoofer MBC (0–58 Hz & 58–135 Hz): Upward expansion (1.35:1) + 55 ms / 25 ms transient attack & Post-EQ sub-port lift.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = "• Trunk Isolation Mud Carve (185 Hz & 240 Hz): Surgical notch + 135–320 Hz dynamic mud suppressor keeps vocals crystal-clear.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

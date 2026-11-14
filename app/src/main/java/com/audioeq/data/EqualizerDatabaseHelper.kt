@@ -363,6 +363,10 @@ class EqualizerDatabaseHelper(context: Context) :
 
     fun loadEnhancerConfig(): EnhancerConfig {
         val db = readableDatabase
+        val subEnabled = getSetting("subwoofer_enabled", "0") == "1"
+        val subIntensity = getSetting("subwoofer_intensity", "0.85").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.85f
+        val subOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.35").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.35f
+        val subAutoLoudness = getSetting("subwoofer_auto_loudness", "1") == "1"
         db.rawQuery(
             """
             SELECT ieq_preset_id, ieq_amount,
@@ -400,11 +404,20 @@ class EqualizerDatabaseHelper(context: Context) :
                     dialogueEnhancerEnabled = dlgOn,
                     dialogueAmount = dlgAmt,
                     surroundEnabled = surrOn,
-                    surroundWidth = surrWidth
+                    surroundWidth = surrWidth,
+                    subwooferEnabled = subEnabled,
+                    subwooferIntensity = subIntensity,
+                    subwooferSubOctaveMix = subOctaveMix,
+                    subwooferAutoLoudness = subAutoLoudness
                 )
             }
         }
-        return EnhancerConfig()
+        return EnhancerConfig(
+            subwooferEnabled = subEnabled,
+            subwooferIntensity = subIntensity,
+            subwooferSubOctaveMix = subOctaveMix,
+            subwooferAutoLoudness = subAutoLoudness
+        )
     }
 
     fun saveEnhancerConfig(config: EnhancerConfig) {
@@ -425,6 +438,10 @@ class EqualizerDatabaseHelper(context: Context) :
             put("audio_profile_id", config.profile.id)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        setSetting("subwoofer_enabled", if (config.subwooferEnabled) "1" else "0")
+        setSetting("subwoofer_intensity", config.subwooferIntensity.coerceIn(0f, 1.5f).toString())
+        setSetting("subwoofer_sub_octave_mix", config.subwooferSubOctaveMix.coerceIn(0f, 0.6f).toString())
+        setSetting("subwoofer_auto_loudness", if (config.subwooferAutoLoudness) "1" else "0")
     }
 
     fun loadAllPresets(): List<EqPreset> {

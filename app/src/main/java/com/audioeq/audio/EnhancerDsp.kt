@@ -143,7 +143,11 @@ data class EnhancerConfig(
     val dialogueEnhancerEnabled: Boolean = false,
     val dialogueAmount: Int = 8,
     val surroundEnabled: Boolean = false,
-    val surroundWidth: Float = 0.45f
+    val surroundWidth: Float = 0.45f,
+    val subwooferEnabled: Boolean = false,
+    val subwooferIntensity: Float = 0.85f,
+    val subwooferSubOctaveMix: Float = 0.35f,
+    val subwooferAutoLoudness: Boolean = true
 ) {
     fun isAnyActive(): Boolean {
         return profile != AudioProfile.OFF ||
@@ -152,7 +156,8 @@ data class EnhancerConfig(
             deepBassEnabled ||
             ieqPreset != IeqPreset.OFF && ieqAmount > 0 ||
             dialogueEnhancerEnabled && dialogueAmount > 0 ||
-            surroundEnabled && surroundWidth > 0.02f
+            surroundEnabled && surroundWidth > 0.02f ||
+            subwooferEnabled && subwooferIntensity > 0.02f
     }
 }
 
@@ -709,17 +714,47 @@ object EnhancerDsp {
 
         for (i in 0 until 31) {
             val f = freqs[i]
-            val ratio = f / 95.0
-            val shelfGain = (boost * 0.62) / sqrt(1.0 + ratio.pow(4.0))
+            val ratio = f / 85.0
+            val shelfGain = (boost * 0.88) / sqrt(1.0 + ratio.pow(4.0))
 
-            val logDist62 = ln(f / 62.0)
-            val punchBell = (boost * 0.38) * exp(-0.5 * (logDist62 / 0.42).pow(2.0))
+            val logDist55 = ln(f / 55.0)
+            val punchBell = (boost * 0.42) * exp(-0.5 * (logDist55 / 0.38).pow(2.0))
 
-            val logDist140 = ln(f / 140.0)
-            val warmthBell = (boost * 0.10) * exp(-0.5 * (logDist140 / 0.32).pow(2.0))
+            val logDist105 = ln(f / 105.0)
+            val upperPunchBell = (boost * 0.24) * exp(-0.5 * (logDist105 / 0.32).pow(2.0))
 
-            result[i] = (shelfGain + punchBell + warmthBell).coerceIn(0.0, 6.0)
+            result[i] = (shelfGain + punchBell + upperPunchBell).coerceIn(0.0, boost)
         }
+        return result
+    }
+
+    fun computeSubwooferCurve31(
+        config: EnhancerConfig,
+        volumeRatio: Float = 0.7f
+    ): DoubleArray {
+        val result = DoubleArray(31)
+        if (!config.subwooferEnabled || config.subwooferIntensity <= 0.02f) return result
+
+        val wInt = config.subwooferIntensity.coerceIn(0.0f, 1.5f).toDouble()
+        val loudnessComp = if (config.subwooferAutoLoudness) {
+            1.0 + 0.35 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
+        } else {
+            1.0
+        }
+        val subOctScale = 0.85 + 0.45 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
+        val eff = wInt * loudnessComp
+
+        result[0] = (-6.5 * wInt).coerceIn(-10.0, 0.0)
+        result[1] = (3.5 * eff * subOctScale).coerceIn(0.0, 12.0)
+        result[2] = (7.0 * eff * subOctScale).coerceIn(0.0, 13.5)
+        result[3] = (8.0 * eff * subOctScale).coerceIn(0.0, 14.5)
+        result[4] = (6.5 * eff).coerceIn(0.0, 12.5)
+        result[5] = (4.0 * eff).coerceIn(0.0, 9.0)
+        result[6] = (1.5 * eff).coerceIn(0.0, 4.5)
+        result[9] = (-3.0 * wInt).coerceIn(-6.0, 0.0)
+        result[10] = (-4.5 * wInt).coerceIn(-7.5, 0.0)
+        result[11] = (-2.5 * wInt).coerceIn(-4.5, 0.0)
+
         return result
     }
 
@@ -882,10 +917,12 @@ object EnhancerDsp {
         isSpeaker: Boolean = false,
         sampleRate: Double = 48000.0,
         userBand0Db: Double = 0.0,
-        userBand1Db: Double = 0.0
+        userBand1Db: Double = 0.0,
+        volumeRatio: Float = 0.7f
     ): DoubleArray {
         val deepBass = computeDeepBassCurve31(config, sampleRate, userBand0Db, userBand1Db)
         val bass = computeBassEnhancer31(config)
+        val subwoofer = computeSubwooferCurve31(config, volumeRatio)
         val virtBass = computeVirtualBass31(config)
         val ieq = computeIeq31(config)
         val dynSteer = computeDynamicProfileSteering31(config)
@@ -893,7 +930,7 @@ object EnhancerDsp {
         val surr = computeSurroundContour31(config, isSpeaker, sampleRate)
 
         return DoubleArray(31) { i ->
-            (deepBass[i] + bass[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 16.0)
+            (deepBass[i] + bass[i] + subwoofer[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 16.0)
         }
     }
 
