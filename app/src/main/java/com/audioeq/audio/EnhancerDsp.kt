@@ -624,13 +624,13 @@ object EnhancerDsp {
         if (!active) return result
 
         val driveScale = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
-            (config.bassBoostDb.toDouble() / 5.0).coerceIn(0.75, 1.12)
+            (config.bassBoostDb.toDouble() / 4.5).coerceIn(0.65, 1.35)
         } else {
             1.0
         }
 
-        val g0ShelfDb = (userBand0Db.coerceIn(-6.0, 6.0) * 0.45 + 4.8 * driveScale).coerceIn(2.5, 8.2)
-        val g1PeakDb = (userBand1Db.coerceIn(-6.0, 6.0) * 0.45 + 3.8 * driveScale).coerceIn(2.0, 7.0)
+        val g0ShelfDb = (userBand0Db.coerceIn(-12.0, 12.0) + 4.5 * driveScale).coerceIn(2.5, 10.5)
+        val g1PeakDb = (userBand1Db.coerceIn(-12.0, 12.0) + 3.5 * driveScale).coerceIn(2.0, 9.0)
         val gMudCutDb = (-2.5 * driveScale).coerceIn(-3.5, -1.5)
 
         val freqs = EqConstants.BAND_FREQUENCIES_31
@@ -657,7 +657,7 @@ object EnhancerDsp {
                 q = 1.40,
                 sampleRate = sampleRate
             )
-            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-3.5, 8.5)
+            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-4.5, 12.0)
         }
         return result
     }
@@ -736,25 +736,24 @@ object EnhancerDsp {
         if (!config.subwooferEnabled || config.subwooferIntensity <= 0.02f) return result
 
         val wInt = config.subwooferIntensity.coerceIn(0.0f, 1.5f).toDouble()
-        val cleanDrive = kotlin.math.tanh(wInt * 0.92) / kotlin.math.tanh(0.92)
         val loudnessComp = if (config.subwooferAutoLoudness) {
             1.0 + 0.35 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
         } else {
             1.0
         }
         val subOctScale = 0.85 + 0.45 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
-        val eff = cleanDrive * loudnessComp
+        val eff = (wInt * loudnessComp).coerceAtMost(1.65)
 
-        result[0] = (-6.5 * cleanDrive).coerceIn(-8.5, 0.0)
-        result[1] = (3.5 * eff * subOctScale).coerceIn(0.0, 6.2)
-        result[2] = (7.0 * eff * subOctScale).coerceIn(0.0, 8.4)
-        result[3] = (8.0 * eff * subOctScale).coerceIn(0.0, 9.6)
-        result[4] = (6.5 * eff).coerceIn(0.0, 8.0)
-        result[5] = (4.0 * eff).coerceIn(0.0, 5.5)
-        result[6] = (1.5 * eff).coerceIn(0.0, 2.5)
-        result[9] = (-3.0 * cleanDrive).coerceIn(-4.2, 0.0)
-        result[10] = (-4.5 * cleanDrive).coerceIn(-5.5, 0.0)
-        result[11] = (-2.5 * cleanDrive).coerceIn(-3.5, 0.0)
+        result[0] = (-6.5 * wInt).coerceIn(-12.0, 0.0)
+        result[1] = (3.5 * eff * subOctScale).coerceIn(0.0, 10.0)
+        result[2] = (7.0 * eff * subOctScale).coerceIn(0.0, 13.5)
+        result[3] = (8.0 * eff * subOctScale).coerceIn(0.0, 14.5)
+        result[4] = (6.5 * eff).coerceIn(0.0, 12.0)
+        result[5] = (4.0 * eff).coerceIn(0.0, 8.5)
+        result[6] = (1.5 * eff).coerceIn(0.0, 4.0)
+        result[9] = (-3.0 * wInt).coerceIn(-6.5, 0.0)
+        result[10] = (-4.5 * wInt).coerceIn(-8.0, 0.0)
+        result[11] = (-2.5 * wInt).coerceIn(-5.5, 0.0)
 
         return result
     }
@@ -932,37 +931,8 @@ object EnhancerDsp {
         val surr = computeSurroundContour31(config, isSpeaker, sampleRate)
 
         return DoubleArray(31) { i ->
-            val lowEnd = when {
-                subActive && config.deepBassEnabled -> {
-                    if (i <= 1) {
-                        (subwoofer[i] * 0.45 + deepBass[i] * 0.65).coerceIn(-4.0, 7.5)
-                    } else if (subwoofer[i] > 0.0 && deepBass[i] > 0.0) {
-                        val combinedSubDeep = subwoofer[i] * 0.82 + deepBass[i] * 0.38
-                        if (combinedSubDeep > 7.8) {
-                            7.8 + 2.2 * kotlin.math.tanh((combinedSubDeep - 7.8) / 2.2)
-                        } else {
-                            combinedSubDeep
-                        }
-                    } else {
-                        (subwoofer[i] + deepBass[i] * 0.5).coerceIn(-6.5, 9.8)
-                    }
-                }
-                subActive -> subwoofer[i]
-                config.deepBassEnabled && config.bassEnabled -> {
-                    if (deepBass[i] > 0.0 && bass[i] > 0.0) {
-                        val combinedLow = deepBass[i] * 0.78 + bass[i] * 0.48
-                        if (combinedLow > 6.2) {
-                            6.2 + 2.0 * kotlin.math.tanh((combinedLow - 6.2) / 2.0)
-                        } else {
-                            combinedLow
-                        }
-                    } else {
-                        deepBass[i] + bass[i] * 0.5
-                    }
-                }
-                else -> deepBass[i] + bass[i]
-            }
-            (lowEnd + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i]).coerceIn(-12.0, 10.5)
+            (subwoofer[i] + deepBass[i] + bass[i] + virtBass[i] + ieq[i] + dynSteer[i] + de[i] + surr[i])
+                .coerceIn(-15.0, 15.0)
         }
     }
 

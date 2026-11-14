@@ -1103,15 +1103,14 @@ class MasterEqEngine(
         val hearingL31 = interpolateHearingTo31(params.hearingCurve, isRight = false)
         val hearingR31 = interpolateHearingTo31(params.hearingCurve, isRight = true)
         val rawRight10 = if (params.splitLREnabled) params.bandGains10R else params.bandGains10L
-        val deepShiftScale = if (cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f) 0.55 else 1.0
         val deepBassShiftL31 = EnhancerDsp.computeDeepBassShiftDelta31(params.bandGains10L, cfg.deepBassEnabled)
         val deepBassShiftR31 = EnhancerDsp.computeDeepBassShiftDelta31(rawRight10, cfg.deepBassEnabled)
 
         val calL = DoubleArray(31) {
-            (calCurve[it] + hearingL31[it] + deepBassShiftL31[it] * deepShiftScale).coerceIn(-12.0, 10.5)
+            (calCurve[it] + hearingL31[it] + deepBassShiftL31[it]).coerceIn(-15.0, 16.0)
         }
         val calR = DoubleArray(31) {
-            (calCurve[it] + hearingR31[it] + deepBassShiftR31[it] * deepShiftScale).coerceIn(-12.0, 10.5)
+            (calCurve[it] + hearingR31[it] + deepBassShiftR31[it]).coerceIn(-15.0, 16.0)
         }
 
         val targetL31 = Dsp.compute31BandTargets(
@@ -1206,14 +1205,6 @@ class MasterEqEngine(
             }
             (nonLimPreamp + loudnessMakeup).coerceIn(-12.0, 6.0)
         }
-        val peakLowGainDb = (0..9).maxOf { k ->
-            maxOf(targetL31[k], targetR31[k])
-        }
-        val bassHeadroomTrimDb = if (intentionalBassLiftActive && peakLowGainDb > 4.2) {
-            -((peakLowGainDb - 4.2) * 0.55).coerceIn(0.0, 5.2)
-        } else {
-            0.0
-        }
         val volmaxMakeup = if (cfg.profile != AudioProfile.OFF) {
             endpointSpec.volmaxMakeupDb.toDouble().coerceAtLeast(0.0)
         } else {
@@ -1221,12 +1212,12 @@ class MasterEqEngine(
         }
 
         val leftInputGain = if (effectiveEnabled) {
-            (basePreamp + bassHeadroomTrimDb + trimL + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat()
+            (basePreamp + trimL + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat()
         } else {
             0.0f
         }
         val rightInputGain = if (effectiveEnabled) {
-            (basePreamp + bassHeadroomTrimDb + trimR + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat()
+            (basePreamp + trimR + volmaxMakeup).coerceIn(-12.0, 6.0).toFloat()
         } else {
             0.0f
         }
@@ -1238,7 +1229,7 @@ class MasterEqEngine(
 
         val hasGlobalSession = dpSessions.containsKey(0) || eqSessions.containsKey(0)
 
-        val safeBassLimiterCeiling = if (intentionalBassLiftActive) -0.8f else -0.3f
+        val safeBassLimiterCeiling = if (intentionalBassLiftActive) -0.4f else -0.3f
         val effectiveLimiterCeilingDb = if (isSpeakerRoute || intentionalBassLiftActive) {
             minOf(params.limiterCeilingDb.toFloat(), safeBassLimiterCeiling).coerceIn(-3.0f, -0.1f)
         } else {
@@ -1322,57 +1313,58 @@ class MasterEqEngine(
                 if (usePostEq) {
                     val prevPost = lastAppliedPostEq[sid]?.takeIf { it.size == sessionBands }
                         ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedPostEq[sid] = it }
-                    val subActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
                     val deepActive = sessionEnabled && cfg.deepBassEnabled
+                    val subActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
                     val bassActive = sessionEnabled && cfg.bassEnabled && cfg.bassBoostDb > 0.05f && !subActive
                     val bassPostScale = if (bassActive) (cfg.bassBoostDb / 6.0f).coerceIn(0f, 1f) else 0f
                     val wInt = if (subActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
-                    val cleanSubDrive = if (subActive) (kotlin.math.tanh(wInt * 0.90) / kotlin.math.tanh(0.90)).toFloat() else 0f
+                    val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
+                    val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
 
                     for (k in 0 until sessionBands) {
                         val deepOrBassPost = if (!deepActive && !bassActive) {
                             0.0f
-                        } else {
-                            val combinedScale = when {
-                                subActive && deepActive -> 0.45f
-                                deepActive && bassActive -> 0.85f
-                                deepActive -> 0.75f
-                                else -> 0.80f * bassPostScale
+                        } else if (sessionBands >= 20) {
+                            when (k) {
+                                0 -> (if (deepActive) 2.2f else 0f) + 2.4f * bassPostScale
+                                1, 2 -> (if (deepActive) 2.6f else 0f) + 3.2f * bassPostScale
+                                3, 4 -> (if (deepActive) 1.8f else 0f) + 2.8f * bassPostScale
+                                5 -> (if (deepActive) 0.9f else 0f) + 1.8f * bassPostScale
+                                else -> 0.0f
                             }
-                            if (sessionBands >= 20) {
-                                when (k) {
-                                    1, 2 -> 1.2f * combinedScale
-                                    3, 4 -> 1.0f * combinedScale
-                                    else -> 0.0f
-                                }
-                            } else {
-                                when (k) {
-                                    0 -> 1.2f * combinedScale
-                                    1 -> 0.8f * combinedScale
-                                    else -> 0.0f
-                                }
+                        } else {
+                            when (k) {
+                                0 -> (if (deepActive) 2.6f else 0f) + 3.2f * bassPostScale
+                                1 -> (if (deepActive) 1.8f else 0f) + 2.6f * bassPostScale
+                                2 -> 1.2f * bassPostScale
+                                else -> 0.0f
                             }
                         }
                         val subwooferPost = if (!subActive) {
                             0.0f
                         } else if (sessionBands >= 20) {
                             when (k) {
-                                0 -> if (deepActive) -1.5f * cleanSubDrive else -3.5f * cleanSubDrive
-                                2 -> 1.1f * cleanSubDrive
-                                3 -> 1.4f * cleanSubDrive
-                                4 -> 1.1f * cleanSubDrive
-                                10 -> -1.6f * cleanSubDrive
+                                0 -> -4.0f * wInt
+                                2 -> 3.5f * subEff
+                                3 -> 4.5f * subEff
+                                4 -> 3.5f * subEff
+                                10 -> -2.0f * wInt
                                 else -> 0.0f
                             }
                         } else {
                             when (k) {
-                                0 -> 1.3f * cleanSubDrive
-                                1 -> 0.9f * cleanSubDrive
-                                3 -> -1.5f * cleanSubDrive
+                                0 -> 4.2f * subEff
+                                1 -> 3.2f * subEff
+                                3 -> -2.0f * wInt
                                 else -> 0.0f
                             }
                         }
-                        val postGain = (deepOrBassPost + subwooferPost).coerceIn(-8.0f, 2.6f)
+                        val overflowBoost = if (sessionEnabled && effL[k] > 10.5f) {
+                            (effL[k] - 10.5f).coerceIn(0.0f, 5.5f)
+                        } else {
+                            0.0f
+                        }
+                        val postGain = (deepOrBassPost + subwooferPost + overflowBoost).coerceIn(-10.0f, 12.0f)
                         if (prevPost[k].isNaN() || abs(prevPost[k] - postGain) >= 0.05f) {
                             val postBand = DynamicsProcessing.EqBand(true, bandCutoffs[k], postGain)
                             dp.setPostEqBandAllChannelsTo(k, postBand)
@@ -1383,14 +1375,13 @@ class MasterEqEngine(
 
                 if (dpMbcEnabled[sid] != false) {
                     val dialogueActive = sessionEnabled && hasDialogueMbc
-                    val subMbcActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
                     val deepBassMbcActive = sessionEnabled && cfg.deepBassEnabled
+                    val subMbcActive = sessionEnabled && cfg.subwooferEnabled && cfg.subwooferIntensity > 0.02f
                     val bassMbcActive = sessionEnabled && cfg.bassEnabled && cfg.bassBoostDb > 0.05f && !subMbcActive
                     val bassNorm = if (bassMbcActive) (cfg.bassBoostDb / 6.0f).coerceIn(0f, 1f) else 0f
                     val wInt = if (subMbcActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
-                    val cleanSubDrive = if (subMbcActive) (kotlin.math.tanh(wInt * 0.90) / kotlin.math.tanh(0.90)).toFloat() else 0f
-                    val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.25f * (1.0f - currentVolumeRatio) else 1.0f
-                    val subEff = ((cleanSubDrive * subLoudness) + (if (subMbcActive && deepBassMbcActive) 0.12f else 0f)).coerceIn(0f, 1.25f)
+                    val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
+                    val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
                     val privilegedMbcActive = sessionEnabled && currentMode != EngineMode.LEGACY
                     val mbcKey = (if (dialogueActive) (cfg.dialogueAmount + 100) else 0) +
                         (if (deepBassMbcActive) 1000 else 0) +
@@ -1404,30 +1395,30 @@ class MasterEqEngine(
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         58.0f,
-                                        14.0f,
-                                        220.0f,
-                                        2.8f,
-                                        -18.0f,
+                                        55.0f,
+                                        260.0f,
+                                        2.2f,
+                                        -22.0f,
                                         8.0f,
                                         -58.0f,
-                                        1.18f,
-                                        (0.8f * subEff).coerceIn(0f, 1.1f),
-                                        (2.2f * subEff).coerceIn(0f, 2.6f)
+                                        1.35f,
+                                        (2.5f * subEff).coerceIn(0f, 4.5f),
+                                        (5.5f * subEff).coerceIn(0f, 9.0f)
                                     )
                                 }
                                 b == 1 && subMbcActive -> {
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         135.0f,
-                                        12.0f,
+                                        25.0f,
                                         110.0f,
-                                        2.6f,
-                                        -16.0f,
+                                        2.5f,
+                                        -18.0f,
                                         6.0f,
                                         -55.0f,
-                                        1.12f,
-                                        (0.5f * subEff).coerceIn(0f, 0.8f),
-                                        (1.4f * subEff).coerceIn(0f, 1.8f)
+                                        1.15f,
+                                        (1.5f * subEff).coerceIn(0f, 3.0f),
+                                        (3.0f * subEff).coerceIn(0f, 5.5f)
                                     )
                                 }
                                 b == 2 && subMbcActive -> {
@@ -1436,53 +1427,46 @@ class MasterEqEngine(
                                         320.0f,
                                         8.0f,
                                         90.0f,
-                                        2.5f,
+                                        3.0f,
                                         -16.0f,
-                                        6.0f,
+                                        4.0f,
                                         -60.0f,
                                         1.0f,
                                         0.0f,
-                                        (-1.8f * cleanSubDrive).coerceIn(-2.2f, 0f)
+                                        (-2.5f * wInt).coerceIn(-4.0f, 0f)
                                     )
                                 }
                                 b == 0 && (deepBassMbcActive || bassMbcActive) -> {
-                                    val combinedScale = when {
-                                        deepBassMbcActive && bassMbcActive -> 0.85f + 0.15f * bassNorm
-                                        deepBassMbcActive -> 0.78f
-                                        else -> 0.85f * bassNorm
-                                    }
+                                    val preGainDb = (if (deepBassMbcActive) 1.6f else 0f) + (2.6f * bassNorm)
+                                    val postGainDb = (if (deepBassMbcActive) 2.8f else 0f) + (4.2f * bassNorm)
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         Dsp.MBC_CUTOFFS[0],
-                                        16.0f,
-                                        170.0f,
-                                        2.6f,
-                                        -18.0f,
-                                        7.0f,
+                                        32.0f,
+                                        180.0f,
+                                        2.2f,
+                                        -20.0f,
+                                        8.0f,
                                         -60.0f,
-                                        1.18f,
-                                        (0.8f * combinedScale).coerceIn(0f, 1.0f),
-                                        (2.0f * combinedScale).coerceIn(0f, 2.3f)
+                                        1.32f,
+                                        preGainDb.coerceIn(0f, 4.5f),
+                                        postGainDb.coerceIn(0f, 6.5f)
                                     )
                                 }
                                 b == 1 && (deepBassMbcActive || bassMbcActive) -> {
-                                    val punchScale = when {
-                                        deepBassMbcActive && bassMbcActive -> 0.75f * bassNorm.coerceAtLeast(0.5f)
-                                        bassMbcActive -> 0.75f * bassNorm
-                                        else -> 0.45f
-                                    }
+                                    val punchScale = if (bassMbcActive) bassNorm else 0.55f
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         Dsp.MBC_CUTOFFS[1],
-                                        14.0f,
-                                        120.0f,
-                                        2.3f,
-                                        -17.0f,
+                                        26.0f,
+                                        130.0f,
+                                        2.0f,
+                                        -18.0f,
                                         6.0f,
                                         -58.0f,
-                                        1.12f,
-                                        (0.5f * punchScale).coerceIn(0f, 0.7f),
-                                        (1.3f * punchScale).coerceIn(0f, 1.5f)
+                                        1.20f,
+                                        (1.4f * punchScale).coerceIn(0f, 2.0f),
+                                        (2.6f * punchScale).coerceIn(0f, 3.5f)
                                     )
                                 }
                                 dialogueActive && b in 2..3 -> {
@@ -1804,7 +1788,7 @@ class MasterEqEngine(
                         lastAppliedBassKey.remove(sid)
                         return@runCatching
                     }
-                    val wantBass = sessionEnabled && !dpSessions.containsKey(sid) && desiredBassStrength > 0
+                    val wantBass = sessionEnabled && desiredBassStrength > 0
                     val bassKey = if (wantBass) desiredBassStrength else -1
                     if (lastAppliedBassKey[sid] != bassKey) {
                         if (bb.strengthSupported) {

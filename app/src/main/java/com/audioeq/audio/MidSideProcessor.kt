@@ -198,48 +198,44 @@ class MidSideProcessor(sampleRate: Int = 48000) {
         val userBand0 = effective10BandDb.getOrElse(0) { 0f }.toDouble()
         val userBand1 = effective10BandDb.getOrElse(1) { 0f }.toDouble()
         val driveScale = if (enhancerConfig.bassEnabled && enhancerConfig.bassBoostDb > 0.5f) {
-            (enhancerConfig.bassBoostDb.toDouble() / 5.0).coerceIn(0.75, 1.10)
+            (enhancerConfig.bassBoostDb.toDouble() / 4.5).coerceIn(0.65, 1.35)
         } else {
             1.0
         }
-        val subCoactiveScale = if (enhancerConfig.subwooferEnabled && enhancerConfig.subwooferIntensity > 0.02f) 0.55 else 1.0
-        val g0ShelfDb = ((userBand0 * 0.5 + 3.8 * driveScale) * subCoactiveScale).coerceIn(1.5, 6.8)
-        val g1PeakDb = ((userBand1 * 0.5 + 2.8 * driveScale) * subCoactiveScale).coerceIn(1.2, 5.5)
-        val gMudCutDb = (-2.5 * driveScale * subCoactiveScale).coerceIn(-3.5, -1.0)
+        val g0ShelfDb = (userBand0 + 4.5 * driveScale).coerceIn(2.5, 10.5)
+        val g1PeakDb = (userBand1 + 3.5 * driveScale).coerceIn(2.0, 9.0)
+        val gMudCutDb = (-2.5 * driveScale).coerceIn(-3.5, -1.5)
 
-        deepStageALowShelf.configure(FilterType.LOW_SHELF, 38.0, fs, g0ShelfDb, q = 0.85)
+        deepStageALowShelf.configure(FilterType.LOW_SHELF, 38.0, fs, g0ShelfDb, q = 0.90)
         deepStageBSubPeak.configurePeaking(47.0, fs, g1PeakDb, q = 1.15)
         deepStageBAntiMud.configurePeaking(210.0, fs, gMudCutDb, q = 1.40)
         deepStageCSubExtractor.configureLowPass(120.0, fs, q = 0.7071)
 
         val bassEnhancerBoostDb = if (enhancerConfig.deepBassEnabled) {
-            if (!enhancerConfig.subwooferEnabled && enhancerConfig.bassEnabled && enhancerConfig.bassBoostDb > 0.5f) {
-                enhancerConfig.bassBoostDb.toDouble().coerceIn(2.0, 5.0)
-            } else if (enhancerConfig.subwooferEnabled) {
-                1.8
+            if (enhancerConfig.bassEnabled && enhancerConfig.bassBoostDb > 0.5f) {
+                enhancerConfig.bassBoostDb.toDouble().coerceIn(2.0, 6.0)
             } else {
-                3.2
+                4.5
             }
         } else {
             0.0
         }
-        deepBassBoostLinear = (10.0.pow(bassEnhancerBoostDb / 20.0) - 1.0) * (if (enhancerConfig.subwooferEnabled) 0.16 else 0.28)
+        deepBassBoostLinear = (10.0.pow(bassEnhancerBoostDb / 20.0) - 1.0) * 0.42
 
         val wInt = enhancerConfig.subwooferIntensity.coerceIn(0f, 1.5f).toDouble()
-        val cleanSubDrive = tanh(wInt * 0.90) / tanh(0.90)
         val loudnessComp = if (enhancerConfig.subwooferAutoLoudness) {
-            1.0 + 0.25 * (1.0 - subCurrentVolumeRatio.coerceIn(0.1f, 1.0f).toDouble())
+            1.0 + 0.45 * (1.0 - subCurrentVolumeRatio.coerceIn(0.1f, 1.0f).toDouble())
         } else {
             1.0
         }
-        val effSub = (cleanSubDrive * loudnessComp).coerceIn(0.0, 1.25)
+        val effSub = (wInt * loudnessComp).coerceIn(0.0, 1.85)
 
         subInfraGuard1.configure(FilterType.HIGH_PASS, 22.0, fs, 0.0, q = 0.7071)
         subInfraGuard2.configure(FilterType.HIGH_PASS, 22.0, fs, 0.0, q = 0.7071)
-        subPortHelmholtz.configurePeaking(38.0, fs, 4.2 * effSub, q = 1.45)
-        subChestPunch.configurePeaking(48.0, fs, 2.8 * effSub, q = 1.25)
-        subTrunkCarve1.configurePeaking(185.0, fs, -3.5 * cleanSubDrive, q = 1.50)
-        subTrunkCarve2.configurePeaking(240.0, fs, -2.2 * cleanSubDrive, q = 1.60)
+        subPortHelmholtz.configurePeaking(38.0, fs, 6.5 * effSub, q = 1.85)
+        subChestPunch.configurePeaking(48.0, fs, 4.5 * effSub, q = 1.40)
+        subTrunkCarve1.configurePeaking(185.0, fs, -4.0 * wInt, q = 1.50)
+        subTrunkCarve2.configurePeaking(240.0, fs, -2.5 * wInt, q = 1.60)
         subSynthBpHpf.configure(FilterType.HIGH_PASS, 52.0, fs, 0.0, q = 0.7071)
         subSynthBpLpf.configureLowPass(95.0, fs, q = 0.7071)
         subSynthSmooth1.configureLowPass(50.0, fs, q = 0.7071)
@@ -254,31 +250,23 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     fun processInterleavedStereo(buffer: FloatArray, frameCount: Int) {
         if (!enabled) return
         val width = stereoWidth.coerceIn(0.5f, 2.0f)
-        val subActive = enhancerConfig.subwooferEnabled && enhancerConfig.subwooferIntensity > 0.02f
         val deepActive = enhancerConfig.deepBassEnabled
+        val subActive = enhancerConfig.subwooferEnabled && enhancerConfig.subwooferIntensity > 0.02f
         val subIntensity = enhancerConfig.subwooferIntensity.coerceIn(0f, 1.5f).toDouble()
-        val cleanSubDrive = tanh(subIntensity * 0.90) / tanh(0.90)
         val subOctaveMix = enhancerConfig.subwooferSubOctaveMix.coerceIn(0f, 0.6f).toDouble()
         val subLoudnessComp = if (enhancerConfig.subwooferAutoLoudness) {
-            1.0 + 0.25 * (1.0 - subCurrentVolumeRatio.coerceIn(0.1f, 1.0f).toDouble())
+            1.0 + 0.45 * (1.0 - subCurrentVolumeRatio.coerceIn(0.1f, 1.0f).toDouble())
         } else {
             1.0
         }
-        val effSub = (cleanSubDrive * subLoudnessComp).coerceIn(0.0, 1.25)
-        val preHeadroomScale = when {
-            subActive && deepActive -> (1.0 / (1.0 + 0.34 * effSub)).coerceIn(0.66, 0.85)
-            subActive -> (1.0 / (1.0 + 0.26 * effSub)).coerceIn(0.72, 0.92)
-            deepActive && enhancerConfig.bassEnabled -> 0.78
-            deepActive -> 0.84
-            else -> 1.0
-        }
+        val effSub = (subIntensity * subLoudnessComp).coerceIn(0.0, 1.85)
         val crossfeedMix = if (width > 1.01f) ((width - 1.0f) * 0.18f).coerceIn(0f, 0.20f) else 0f
         val dLen = delayLineL.size
 
         var idx = 0
         for (frame in 0 until frameCount) {
-            var left = buffer[idx].toDouble() * preHeadroomScale
-            var right = buffer[idx + 1].toDouble() * preHeadroomScale
+            var left = buffer[idx].toDouble()
+            var right = buffer[idx + 1].toDouble()
 
             if (deepActive) {
                 left = deepStageALowShelf.processLeft(left)
@@ -293,19 +281,13 @@ class MidSideProcessor(sampleRate: Int = 48000) {
                 val subR = deepStageCSubExtractor.processRight(right)
                 val subMono = 0.5 * (subL + subR)
                 subEnvelope = 0.995 * subEnvelope + 0.005 * abs(subMono)
-                val dynGain = deepBassBoostLinear / (1.0 + 2.4 * subEnvelope)
-                val excitedSub = tanh(1.25 * subMono) * dynGain
+                val dynGain = deepBassBoostLinear / (1.0 + 1.8 * subEnvelope)
+                val excitedSub = tanh(1.6 * subMono) * dynGain
                 left += excitedSub
                 right += excitedSub
             }
 
             if (subActive) {
-                left = subInfraGuard1.processLeft(subInfraGuard2.processLeft(left))
-                right = subInfraGuard1.processRight(subInfraGuard2.processRight(right))
-
-                left = subTrunkCarve1.processLeft(subTrunkCarve2.processLeft(left))
-                right = subTrunkCarve1.processRight(subTrunkCarve2.processRight(right))
-
                 val monoIn = 0.5 * (left + right)
                 val bp = subSynthBpLpf.processLeft(subSynthBpHpf.processLeft(monoIn))
                 val absBp = abs(bp)
@@ -321,25 +303,31 @@ class MidSideProcessor(sampleRate: Int = 48000) {
                     subReleaseCoeff * subSlowEnv + (1.0 - subReleaseCoeff) * absBp
                 }
 
-                val transientPunch = 1.0 + 1.25 * kotlin.math.max(0.0, subFastEnv - subSlowEnv)
+                val transientPunch = 1.0 + 2.6 * effSub * kotlin.math.max(0.0, subFastEnv - subSlowEnv)
 
                 if (subPrevBpSample <= 0.0 && bp > 0.0) {
                     subFlipOctave = -subFlipOctave
                 }
                 subPrevBpSample = bp
 
-                val rawSubWave = subFlipOctave * subFastEnv * transientPunch
+                val rawSubWave = subFlipOctave * subFastEnv * 1.55
                 val pureSubOctave = subSynthSmooth2.processLeft(subSynthSmooth1.processLeft(rawSubWave))
+
+                val combinedSub = (pureSubOctave * subOctaveMix + bp * 0.40 * effSub) * transientPunch
+                val satSub = tanh(1.65 * combinedSub + 0.14) - subTanhBias
+                val cleanWooferSub = subSatDcBlocker.processLeft(satSub)
+
+                left = subInfraGuard1.processLeft(subInfraGuard2.processLeft(left))
+                right = subInfraGuard1.processRight(subInfraGuard2.processRight(right))
 
                 left = subPortHelmholtz.processLeft(subChestPunch.processLeft(left))
                 right = subPortHelmholtz.processRight(subChestPunch.processRight(right))
 
-                val rawHarmonic = tanh(1.15 * bp + 0.14) - subTanhBias
-                val warmHarmonic = subSatDcBlocker.processLeft(rawHarmonic) * (0.16 * effSub)
-                val subInjection = (pureSubOctave * subOctaveMix * 0.65 * effSub) + warmHarmonic
+                left = subTrunkCarve1.processLeft(subTrunkCarve2.processLeft(left))
+                right = subTrunkCarve1.processRight(subTrunkCarve2.processRight(right))
 
-                left += subInjection
-                right += subInjection
+                left += cleanWooferSub * 0.72
+                right += cleanWooferSub * 0.72
             }
 
             val lowL = monoLowPassFilter.processLeft(left)
