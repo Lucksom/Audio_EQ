@@ -74,21 +74,21 @@ data class MonetPalette(
 }
 
 val LocalMonetPalette = staticCompositionLocalOf {
-    MonetEngine.buildPalette(seedHex = "#006a6a", dark = false)
+    MonetEngine.buildPalette(seedHex = "#9a3412", dark = false)
 }
 
 object MonetEngine {
 
-    const val DEFAULT_SEED_HEX = "#006A6A"
+    const val DEFAULT_SEED_HEX = "#9A3412"
 
     val PRESET_SWATCHES = listOf(
+        "#9a3412",
         "#006a6a",
         "#006e1c",
         "#984061",
         "#a04a00",
         "#0061a4",
         "#6750a4",
-        "#7d5260",
         "#b3261e"
     )
 
@@ -177,7 +177,9 @@ object MonetEngine {
     }
 
     fun buildPalette(seedHex: String, dark: Boolean): MonetPalette {
-        val normalizedHex = if (seedHex.startsWith("#")) seedHex.lowercase(Locale.US) else "#${seedHex.lowercase(Locale.US)}"
+        val rawHex = if (seedHex.startsWith("#")) seedHex.lowercase(Locale.US) else "#${seedHex.lowercase(Locale.US)}"
+        val isWarmDefault = rawHex == "#9a3412" || rawHex == "#006a6a"
+        val normalizedHex = if (isWarmDefault) "#9a3412" else rawHex
         val oklch = hexToOklch(normalizedHex)
         val H = oklch.h
         val C = oklch.c
@@ -188,6 +190,82 @@ object MonetEngine {
         val S = buildRamp(H, neu * 2.5)
         val T = buildRamp((H + 60.0) % 360.0, acc * 0.9)
         val N = buildRamp(H, neu)
+
+        if (isWarmDefault && !dark) {
+            val primary = Color(0xFF9A3412)
+            return MonetPalette(
+                seedHex = normalizedHex,
+                hueDegrees = H.roundToInt(),
+                isDark = false,
+                bg = Color(0xFFF3EBE4),
+                sLow = Color(0xFFF3EBE4),
+                sCont = Color(0xFFFBF6F1),
+                sHigh = Color(0xFFEFE4DA),
+                sTop = Color(0xFFE7DBD2),
+                onSurface = Color(0xFF1F1510),
+                onVar = Color(0xFF6E5B50),
+                outline = Color(0xFFBFA89A),
+                outlineV = Color(0xFFE4D5C9),
+                primary = primary,
+                onPrimary = Color(0xFFFFF4DC),
+                primaryC = Color(0xFFFED7B5),
+                onPrimaryC = Color(0xFF1F1510),
+                secondary = Color(0xFFC2410C),
+                onSecondary = Color(0xFFFFF4DC),
+                secondaryC = Color(0xFFFED7B5),
+                onSecondaryC = Color(0xFF1F1510),
+                tertiary = Color(0xFF5C6B1E),
+                onTertiary = Color(0xFFFFFFFF),
+                tertiaryC = Color(0xFFE4EB9B),
+                onTertiaryC = Color(0xFF1F1510),
+                warn = Color(0xFF8B5000),
+                onWarn = Color(0xFFFFFFFF),
+                warnC = Color(0xFFFFDCBE),
+                glow = primary.copy(alpha = 0.22f),
+                primaryRamp = P,
+                secondaryRamp = S,
+                tertiaryRamp = T,
+                neutralRamp = N
+            )
+        }
+
+        if (isWarmDefault && dark) {
+            val primary = Color(0xFFE86A38)
+            return MonetPalette(
+                seedHex = normalizedHex,
+                hueDegrees = H.roundToInt(),
+                isDark = true,
+                bg = Color(0xFF1A120E),
+                sLow = Color(0xFF211712),
+                sCont = Color(0xFF291D17),
+                sHigh = Color(0xFF34251E),
+                sTop = Color(0xFF402E25),
+                onSurface = Color(0xFFFBF6F1),
+                onVar = Color(0xFFC9B4A6),
+                outline = Color(0xFF7D6659),
+                outlineV = Color(0xFF47342B),
+                primary = primary,
+                onPrimary = Color(0xFF1F1510),
+                primaryC = Color(0xFF5C220D),
+                onPrimaryC = Color(0xFFFED7B5),
+                secondary = Color(0xFFC2410C),
+                onSecondary = Color(0xFFFFF4DC),
+                secondaryC = Color(0xFF5C220D),
+                onSecondaryC = Color(0xFFFED7B5),
+                tertiary = Color(0xFFC8D474),
+                onTertiary = Color(0xFF1F1510),
+                tertiaryC = Color(0xFF3E4715),
+                onTertiaryC = Color(0xFFE4EB9B),
+                warn = Color(0xFFFFB77C),
+                onWarn = Color(0xFF4A2800),
+                warnC = Color(0xFF693C00),
+                glow = primary.copy(alpha = 0.28f),
+                primaryRamp = P,
+                secondaryRamp = S,
+                tertiaryRamp = T,
+                neutralRamp = N
+            )
+        }
 
         return if (dark) {
             val primary = P[80]!!
@@ -231,27 +309,27 @@ object MonetEngine {
                 seedHex = normalizedHex,
                 hueDegrees = H.roundToInt(),
                 isDark = false,
-                bg = N[99]!!,
-                sLow = N[95]!!,
-                sCont = oklchToColor(0.93, neu, H),
-                sHigh = N[90]!!,
-                sTop = oklchToColor(0.86, neu * 1.2, H),
+                bg = oklchToColor(0.94, neu * 1.4, H),
+                sLow = oklchToColor(0.94, neu * 1.4, H),
+                sCont = oklchToColor(0.98, neu * 0.8, H),
+                sHigh = oklchToColor(0.91, neu * 1.6, H),
+                sTop = oklchToColor(0.88, neu * 1.8, H),
                 onSurface = N[10]!!,
-                onVar = N[30]!!,
-                outline = N[50]!!,
-                outlineV = N[80]!!,
+                onVar = oklchToColor(0.42, neu * 2.2, H),
+                outline = oklchToColor(0.72, neu * 2.0, H),
+                outlineV = oklchToColor(0.86, neu * 1.6, H),
                 primary = primary,
-                onPrimary = P[99]!!,
+                onPrimary = Color(0xFFFFF4DC),
                 primaryC = P[90]!!,
-                onPrimaryC = P[10]!!,
-                secondary = S[40]!!,
-                onSecondary = S[99]!!,
-                secondaryC = S[90]!!,
-                onSecondaryC = S[10]!!,
+                onPrimaryC = N[10]!!,
+                secondary = P[50] ?: primary,
+                onSecondary = Color(0xFFFFF4DC),
+                secondaryC = P[90]!!,
+                onSecondaryC = N[10]!!,
                 tertiary = T[40]!!,
                 onTertiary = T[99]!!,
-                tertiaryC = T[90]!!,
-                onTertiaryC = T[10]!!,
+                tertiaryC = Color(0xFFE4EB9B),
+                onTertiaryC = Color(0xFF1F1510),
                 warn = Color(0xFF8B5000),
                 onWarn = Color(0xFFFFFFFF),
                 warnC = Color(0xFFFFDCBE),

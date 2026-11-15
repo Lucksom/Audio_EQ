@@ -9,8 +9,6 @@ import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.Enhancers
 import com.audioeq.audio.MidSideProcessor
-import com.audioeq.audio.SubwooferEnclosure
-import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqMode
 import com.audioeq.model.HeadphoneProfile
@@ -217,34 +215,23 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifySubwooferAllPassPhaseRotatorAnd13ParameterArchitecture() {
-        val coeff60 = EnhancerDsp.computeAllPassCoefficient(60.0, 48000.0)
-        val coeff100 = EnhancerDsp.computeAllPassCoefficient(100.0, 48000.0)
-        assertTrue("All-pass coefficient must be negative for sub-100 Hz at 48 kHz", coeff60 < -0.98 && coeff60 > -1.0)
-        assertTrue("Higher phase frequency must increase all-pass coefficient", coeff100 > coeff60)
-
-        val portedCfg = EnhancerConfig(
+    fun verifySubwooferCrossoverAndCoreParameters() {
+        val lowLpfCfg = EnhancerConfig(
             subwooferEnabled = true,
             subwooferIntensity = 1.0f,
-            subwooferEnclosure = SubwooferEnclosure.PORTED,
-            subwooferPortHz = 38.0f,
-            subwooferCrossoverHz = 58.0f,
-            subwooferRoomMode = SubwooferRoomMode.CAR_TRUNK
+            subwooferSubOctaveMix = 0.35f,
+            subwooferAutoLoudness = true,
+            subwooferCrossoverHz = 55.0f
         )
-        val sealedCfg = portedCfg.copy(
-            subwooferEnclosure = SubwooferEnclosure.SEALED,
-            subwooferRoomMode = SubwooferRoomMode.STUDIO_DRY
+        val highLpfCfg = lowLpfCfg.copy(
+            subwooferCrossoverHz = 120.0f
         )
-        val bandpassCfg = portedCfg.copy(
-            subwooferEnclosure = SubwooferEnclosure.BANDPASS,
-            subwooferVocalPriority = true
-        )
-        val portedCurve = EnhancerDsp.computeSubwooferCurve31(portedCfg)
-        val sealedCurve = EnhancerDsp.computeSubwooferCurve31(sealedCfg)
-        val bandpassCurve = EnhancerDsp.computeSubwooferCurve31(bandpassCfg)
+        val lowCurve = EnhancerDsp.computeSubwooferCurve31(lowLpfCfg)
+        val highCurve = EnhancerDsp.computeSubwooferCurve31(highLpfCfg)
 
-        assertTrue("Ported Car Trunk must deliver stronger 40 Hz resonance than Sealed Studio Dry", portedCurve[3] > sealedCurve[3] + 1.0)
-        assertTrue("Bandpass with Vocal Priority must scoop 100-200 Hz deeper than Sealed", bandpassCurve[9] < sealedCurve[9] - 1.0)
+        assertTrue("40 Hz port peak must remain strong", lowCurve[3] > 6.5)
+        assertTrue("120 Hz Low-Pass Crossover must boost 80-125 Hz more than 55 Hz crossover", highCurve[6] > lowCurve[6] + 2.0)
+        assertTrue("120 Hz Low-Pass Crossover must boost 100 Hz more than 55 Hz crossover", highCurve[7] > lowCurve[7] + 2.0)
     }
 
     @Test

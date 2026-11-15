@@ -74,23 +74,23 @@ fun AudioEqScreen(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Save preset",
-                        tint = palette.onSecondaryC
+                        tint = palette.onPrimary
                     )
                 },
                 text = {
                     Text(
                         text = "Save preset",
                         fontFamily = SpaceGroteskFontFamily,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp,
-                        color = palette.onSecondaryC
+                        color = palette.onPrimary
                     )
                 },
-                shape = RoundedCornerShape(20.dp),
-                containerColor = palette.secondaryC,
+                shape = RoundedCornerShape(999.dp),
+                containerColor = palette.primary,
                 elevation = FloatingActionButtonDefaults.elevation(
-                    defaultElevation = 6.dp,
-                    pressedElevation = 10.dp
+                    defaultElevation = 8.dp,
+                    pressedElevation = 12.dp
                 ),
                 modifier = Modifier
                     .padding(bottom = 8.dp, end = 4.dp)
@@ -111,7 +111,7 @@ fun AudioEqScreen(
                     .fillMaxWidth()
                     .widthIn(max = 680.dp)
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = PaddingValues(top = 10.dp, bottom = 88.dp)
             ) {
                 item {
@@ -195,6 +195,7 @@ fun AudioEqScreen(
                         config = uiState.enhancerConfig,
                         activeRoute = uiState.activeRoute,
                         enabled = uiState.masterEnabled,
+                        useKnobs = uiState.useKnobs,
                         onSelectProfile = viewModel::selectAudioProfile,
                         onToggleDeepBass = viewModel::setDeepBassEnabled,
                         onToggleBass = viewModel::setBassEnabled,
@@ -206,6 +207,19 @@ fun AudioEqScreen(
                         onToggleSurround = viewModel::setSurroundEnabled,
                         onSurroundWidthChange = viewModel::setSurroundWidth,
                         onResetAll = viewModel::resetEnhancers
+                    )
+                }
+
+                item {
+                    SubwooferCard(
+                        config = uiState.enhancerConfig,
+                        enabled = uiState.masterEnabled,
+                        useKnobs = uiState.useKnobs,
+                        onToggleSubwoofer = viewModel::setSubwooferEnabled,
+                        onSubwooferIntensityChange = viewModel::setSubwooferIntensity,
+                        onSubwooferSubOctaveChange = viewModel::setSubwooferSubOctaveMix,
+                        onCrossoverHzChange = viewModel::setSubwooferCrossoverHz,
+                        onToggleSubwooferAutoLoudness = viewModel::setSubwooferAutoLoudness
                     )
                 }
 
@@ -229,28 +243,6 @@ fun AudioEqScreen(
                         onClearAutoEq = viewModel::clearAutoEqProfile,
                         onDismissSuggestion = viewModel::dismissSuggestedAutoEq,
                         onRefreshDatabase = viewModel::refreshAutoEqDatabase
-                    )
-                }
-
-                item {
-                    SubwooferCard(
-                        config = uiState.enhancerConfig,
-                        enabled = uiState.masterEnabled,
-                        liveSpectrum31 = uiState.liveSpectrum31,
-                        gainReduction6 = uiState.gainReduction6,
-                        onToggleSubwoofer = viewModel::setSubwooferEnabled,
-                        onSubwooferIntensityChange = viewModel::setSubwooferIntensity,
-                        onSubwooferSubOctaveChange = viewModel::setSubwooferSubOctaveMix,
-                        onToggleSubwooferAutoLoudness = viewModel::setSubwooferAutoLoudness,
-                        onSelectEnclosure = viewModel::setSubwooferEnclosure,
-                        onCrossoverHzChange = viewModel::setSubwooferCrossoverHz,
-                        onPortHzChange = viewModel::setSubwooferPortHz,
-                        onDampingChange = viewModel::setSubwooferDamping,
-                        onPhaseDegChange = viewModel::setSubwooferPhaseDeg,
-                        onWarmthChange = viewModel::setSubwooferWarmth,
-                        onSubsonicHzChange = viewModel::setSubwooferSubsonicHz,
-                        onToggleVocalPriority = viewModel::setSubwooferVocalPriority,
-                        onSelectRoomMode = viewModel::setSubwooferRoomMode
                     )
                 }
 
@@ -339,6 +331,7 @@ fun AudioEqScreen(
             musicOnlyTrackingEnabled = uiState.musicOnlyTrackingEnabled,
             selectedMusicPackages = uiState.selectedMusicPackages,
             legacyGlobalMixMode = uiState.legacyGlobalMixMode,
+            useKnobs = uiState.useKnobs,
             onSelectMode = viewModel::selectMode,
             onSelectLegacyGlobalMixMode = viewModel::setLegacyGlobalMixMode,
             onShizukuAction = viewModel::handleShizukuAction,
@@ -354,6 +347,7 @@ fun AudioEqScreen(
             onClearSelectedMusicPackages = viewModel::clearSelectedMusicPackages,
             onOpenNotificationAccess = viewModel::openNotificationAccessSettings,
             onSelectThemeMode = viewModel::setThemeMode,
+            onToggleUseKnobs = viewModel::setUseKnobs,
             onSelectSeedHex = viewModel::setSeedHex,
             onSetGithubRepo = viewModel::setGithubRepo,
             onCheckGithubUpdates = { viewModel.checkForGithubUpdates() },

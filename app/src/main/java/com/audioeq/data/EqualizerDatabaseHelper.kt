@@ -7,8 +7,6 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
-import com.audioeq.audio.SubwooferEnclosure
-import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqPreset
 import com.audioeq.model.OutputRoute
@@ -322,15 +320,7 @@ class EqualizerDatabaseHelper(context: Context) :
         val subIntensity = getSetting("subwoofer_intensity", "0.85").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.85f
         val subOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.35").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.35f
         val subAutoLoudness = getSetting("subwoofer_auto_loudness", "1") == "1"
-        val subEnclosure = SubwooferEnclosure.fromId(getSetting("subwoofer_enclosure", SubwooferEnclosure.PORTED.id))
         val subCrossoverHz = getSetting("subwoofer_crossover_hz", "58.0").toFloatOrNull()?.coerceIn(55f, 120f) ?: 58.0f
-        val subPortHz = getSetting("subwoofer_port_hz", "38.0").toFloatOrNull()?.coerceIn(28f, 55f) ?: 38.0f
-        val subDamping = getSetting("subwoofer_damping", "0.26").toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.26f
-        val subPhaseDeg = getSetting("subwoofer_phase_deg", "0.0").toFloatOrNull()?.coerceIn(0f, 180f) ?: 0.0f
-        val subWarmth = getSetting("subwoofer_warmth", "0.65").toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.65f
-        val subSubsonicHz = getSetting("subwoofer_subsonic_hz", "22.0").toFloatOrNull()?.coerceIn(15f, 35f) ?: 22.0f
-        val subVocalPriority = getSetting("subwoofer_vocal_priority", "0") == "1"
-        val subRoomMode = SubwooferRoomMode.fromId(getSetting("subwoofer_room_mode", SubwooferRoomMode.THEATER.id))
         db.rawQuery(
             """
             SELECT dialogue_enabled, dialogue_amount,
@@ -368,15 +358,7 @@ class EqualizerDatabaseHelper(context: Context) :
                     subwooferIntensity = subIntensity,
                     subwooferSubOctaveMix = subOctaveMix,
                     subwooferAutoLoudness = subAutoLoudness,
-                    subwooferEnclosure = subEnclosure,
-                    subwooferCrossoverHz = subCrossoverHz,
-                    subwooferPortHz = subPortHz,
-                    subwooferDamping = subDamping,
-                    subwooferPhaseDeg = subPhaseDeg,
-                    subwooferWarmth = subWarmth,
-                    subwooferSubsonicHz = subSubsonicHz,
-                    subwooferVocalPriority = subVocalPriority,
-                    subwooferRoomMode = subRoomMode
+                    subwooferCrossoverHz = subCrossoverHz
                 )
             }
         }
@@ -385,15 +367,7 @@ class EqualizerDatabaseHelper(context: Context) :
             subwooferIntensity = subIntensity,
             subwooferSubOctaveMix = subOctaveMix,
             subwooferAutoLoudness = subAutoLoudness,
-            subwooferEnclosure = subEnclosure,
-            subwooferCrossoverHz = subCrossoverHz,
-            subwooferPortHz = subPortHz,
-            subwooferDamping = subDamping,
-            subwooferPhaseDeg = subPhaseDeg,
-            subwooferWarmth = subWarmth,
-            subwooferSubsonicHz = subSubsonicHz,
-            subwooferVocalPriority = subVocalPriority,
-            subwooferRoomMode = subRoomMode
+            subwooferCrossoverHz = subCrossoverHz
         )
     }
 
@@ -417,15 +391,7 @@ class EqualizerDatabaseHelper(context: Context) :
         setSetting("subwoofer_intensity", config.subwooferIntensity.coerceIn(0f, 1.5f).toString())
         setSetting("subwoofer_sub_octave_mix", config.subwooferSubOctaveMix.coerceIn(0f, 0.6f).toString())
         setSetting("subwoofer_auto_loudness", if (config.subwooferAutoLoudness) "1" else "0")
-        setSetting("subwoofer_enclosure", config.subwooferEnclosure.id)
         setSetting("subwoofer_crossover_hz", config.subwooferCrossoverHz.coerceIn(55f, 120f).toString())
-        setSetting("subwoofer_port_hz", config.subwooferPortHz.coerceIn(28f, 55f).toString())
-        setSetting("subwoofer_damping", config.subwooferDamping.coerceIn(0f, 1f).toString())
-        setSetting("subwoofer_phase_deg", config.subwooferPhaseDeg.coerceIn(0f, 180f).toString())
-        setSetting("subwoofer_warmth", config.subwooferWarmth.coerceIn(0f, 1f).toString())
-        setSetting("subwoofer_subsonic_hz", config.subwooferSubsonicHz.coerceIn(15f, 35f).toString())
-        setSetting("subwoofer_vocal_priority", if (config.subwooferVocalPriority) "1" else "0")
-        setSetting("subwoofer_room_mode", config.subwooferRoomMode.id)
     }
 
     fun loadAllPresets(): List<EqPreset> {

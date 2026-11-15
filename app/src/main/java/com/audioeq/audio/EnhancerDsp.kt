@@ -13,69 +13,6 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlin.math.tan
-
-enum class SubwooferEnclosure(
-    val id: String,
-    val label: String,
-    val badge: String,
-    val subtitle: String
-) {
-    SEALED(
-        id = "sub_sealed",
-        label = "Sealed",
-        badge = "Tight",
-        subtitle = "Tight acoustic suspension with fast transient recovery"
-    ),
-    PORTED(
-        id = "sub_ported",
-        label = "Ported",
-        badge = "Deep",
-        subtitle = "Resonant reflex cabinet with deep air push"
-    ),
-    BANDPASS(
-        id = "sub_bandpass",
-        label = "Bandpass",
-        badge = "Punch",
-        subtitle = "Focused dual-chamber slam with upper-bass scoop"
-    );
-
-    companion object {
-        fun fromId(id: String?): SubwooferEnclosure =
-            entries.firstOrNull { it.id == id } ?: PORTED
-    }
-}
-
-enum class SubwooferRoomMode(
-    val id: String,
-    val label: String,
-    val badge: String,
-    val subtitle: String
-) {
-    STUDIO_DRY(
-        id = "room_studio",
-        label = "Studio Dry",
-        badge = "Direct",
-        subtitle = "Nearfield studio response with zero boundary bloom"
-    ),
-    THEATER(
-        id = "room_theater",
-        label = "Theater",
-        badge = "Balanced",
-        subtitle = "Balanced cinema room acoustic reflection"
-    ),
-    CAR_TRUNK(
-        id = "room_trunk",
-        label = "Car Trunk",
-        badge = "Cabin",
-        subtitle = "Pressurized cabin transfer gain and trunk bloom"
-    );
-
-    companion object {
-        fun fromId(id: String?): SubwooferRoomMode =
-            entries.firstOrNull { it.id == id } ?: THEATER
-    }
-}
 
 enum class AudioProfile(
     val id: String,
@@ -160,15 +97,7 @@ data class EnhancerConfig(
     val subwooferIntensity: Float = 0.85f,
     val subwooferSubOctaveMix: Float = 0.35f,
     val subwooferAutoLoudness: Boolean = true,
-    val subwooferEnclosure: SubwooferEnclosure = SubwooferEnclosure.PORTED,
-    val subwooferCrossoverHz: Float = 58.0f,
-    val subwooferPortHz: Float = 38.0f,
-    val subwooferDamping: Float = 0.26f,
-    val subwooferPhaseDeg: Float = 0.0f,
-    val subwooferWarmth: Float = 0.65f,
-    val subwooferSubsonicHz: Float = 22.0f,
-    val subwooferVocalPriority: Boolean = false,
-    val subwooferRoomMode: SubwooferRoomMode = SubwooferRoomMode.THEATER
+    val subwooferCrossoverHz: Float = 58.0f
 ) {
     fun isAnyActive(): Boolean {
         return profile != AudioProfile.OFF ||
@@ -210,12 +139,6 @@ object EnhancerDsp {
         DeepBassShiftBand(8, 1313, 1031, "Anchors reference midrange pivot"),
         DeepBassShiftBand(9, 1688, 1313, "Bridges lower-mids to fixed upper-mid band")
     )
-
-    fun computeAllPassCoefficient(freqHz: Double, sampleRate: Double): Double {
-        val clampedFreq = freqHz.coerceIn(10.0, sampleRate * 0.45)
-        val t = tan(PI * clampedFreq / sampleRate)
-        return (t - 1.0) / (t + 1.0)
-    }
 
     fun resolveEndpointSpec(
         profile: AudioProfile,
@@ -733,59 +656,21 @@ object EnhancerDsp {
         }
         val subOctScale = 0.85 + 0.45 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
         val eff = (wInt * loudnessComp).coerceAtMost(1.65)
-
-        val portHz = config.subwooferPortHz.coerceIn(28f, 55f).toDouble()
-        val portShiftOct = ln(portHz / 38.0) / ln(2.0)
-        val subsonicHz = config.subwooferSubsonicHz.coerceIn(15f, 35f).toDouble()
-        val subsonicScale = (subsonicHz / 22.0).coerceIn(0.68, 1.55)
         val crossoverHz = config.subwooferCrossoverHz.coerceIn(55f, 120f).toDouble()
         val crossoverScale = ((crossoverHz - 55.0) / 65.0).coerceIn(0.0, 1.0)
-        val damping = config.subwooferDamping.coerceIn(0f, 1f).toDouble()
-        val qResonanceScale = (1.12 - 0.28 * (damping - 0.26)).coerceIn(0.82, 1.20)
-        val warmth = config.subwooferWarmth.coerceIn(0f, 1f).toDouble()
-        val warmthHarmonicDb = (warmth - 0.65) * 2.2 * wInt
 
-        val enclosurePeakMult = when (config.subwooferEnclosure) {
-            SubwooferEnclosure.SEALED -> 0.84
-            SubwooferEnclosure.PORTED -> 1.00
-            SubwooferEnclosure.BANDPASS -> 1.16
-        }
-        val enclosureScoopMult = when (config.subwooferEnclosure) {
-            SubwooferEnclosure.SEALED -> 0.65
-            SubwooferEnclosure.PORTED -> 1.00
-            SubwooferEnclosure.BANDPASS -> 1.25
-        }
-        val roomBoundaryLift = when (config.subwooferRoomMode) {
-            SubwooferRoomMode.STUDIO_DRY -> -0.6 * wInt
-            SubwooferRoomMode.THEATER -> 0.0
-            SubwooferRoomMode.CAR_TRUNK -> 1.6 * wInt
-        }
-
-        val w1 = exp(-0.5 * (portShiftOct / 0.55).pow(2.0)) * (if (portHz < 36.0) 1.22 else 1.0)
-        val w2 = exp(-0.5 * ((portShiftOct + 0.15) / 0.65).pow(2.0))
-        val w3 = exp(-0.5 * (portShiftOct / 0.65).pow(2.0))
-        val w4 = exp(-0.5 * ((portShiftOct - 0.25) / 0.65).pow(2.0))
-        val w5 = exp(-0.5 * ((portShiftOct - 0.45) / 0.65).pow(2.0)) * (0.85 + 0.55 * crossoverScale)
-
-        result[0] = (-6.5 * wInt * subsonicScale).coerceIn(-12.0, 0.0)
-        val subsonic25Cut = if (subsonicHz > 25.0) -(subsonicHz - 25.0) * 0.45 * wInt else 0.0
-        result[1] = ((3.5 * eff * subOctScale * w1 * enclosurePeakMult) + roomBoundaryLift + subsonic25Cut).coerceIn(-6.0, 11.5)
-        result[2] = ((7.0 * eff * subOctScale * w2 * enclosurePeakMult * qResonanceScale) + roomBoundaryLift).coerceIn(0.0, 14.0)
-        result[3] = ((8.0 * eff * subOctScale * w3 * enclosurePeakMult * qResonanceScale) + roomBoundaryLift * 0.8).coerceIn(0.0, 14.5)
-        result[4] = ((6.5 * eff * w4 * enclosurePeakMult * qResonanceScale) + warmthHarmonicDb * 0.4).coerceIn(0.0, 13.0)
-        result[5] = ((4.0 * eff * w5) + warmthHarmonicDb * 0.7).coerceIn(0.0, 9.5)
-        result[6] = ((1.5 * eff * (0.75 + 0.85 * crossoverScale)) + warmthHarmonicDb * 0.85).coerceIn(0.0, 5.5)
-        result[7] = (1.8 * eff * crossoverScale + warmthHarmonicDb * 0.6).coerceIn(0.0, 4.0)
-        result[8] = (0.9 * eff * crossoverScale + warmthHarmonicDb * 0.35).coerceIn(0.0, 2.5)
-        result[9] = (-3.0 * wInt * enclosureScoopMult).coerceIn(-7.5, 0.0)
-        result[10] = (-4.5 * wInt * enclosureScoopMult).coerceIn(-9.0, 0.0)
-        result[11] = (-2.5 * wInt * enclosureScoopMult).coerceIn(-6.5, 0.0)
-
-        if (config.subwooferVocalPriority) {
-            result[15] = (0.8 * wInt).coerceIn(0.0, 1.5)
-            result[16] = (1.1 * wInt).coerceIn(0.0, 1.8)
-            result[17] = (1.1 * wInt).coerceIn(0.0, 1.8)
-        }
+        result[0] = (-6.5 * wInt).coerceIn(-10.0, 0.0)
+        result[1] = (3.5 * eff * subOctScale).coerceIn(0.0, 7.5)
+        result[2] = (7.0 * eff * subOctScale).coerceIn(0.0, 14.0)
+        result[3] = (8.0 * eff * subOctScale).coerceIn(0.0, 14.5)
+        result[4] = (6.5 * eff).coerceIn(0.0, 12.5)
+        result[5] = (4.0 * eff * (0.95 + 0.45 * crossoverScale)).coerceIn(0.0, 10.5)
+        result[6] = (1.5 * eff + 4.2 * eff * crossoverScale).coerceIn(0.0, 8.5)
+        result[7] = (3.8 * eff * crossoverScale).coerceIn(0.0, 6.5)
+        result[8] = (2.2 * eff * crossoverScale).coerceIn(0.0, 4.0)
+        result[9] = (-3.0 * wInt * (1.0 - 0.35 * crossoverScale)).coerceIn(-5.0, 0.0)
+        result[10] = (-4.5 * wInt).coerceIn(-7.5, 0.0)
+        result[11] = (-2.5 * wInt).coerceIn(-4.5, 0.0)
 
         return result
     }

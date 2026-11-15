@@ -20,8 +20,6 @@ import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.EqualizerNotificationHelper
 import com.audioeq.audio.IndexEntry
 import com.audioeq.audio.MusicAppTracker
-import com.audioeq.audio.SubwooferEnclosure
-import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.data.EqRepository
 import com.audioeq.data.GitHubUpdateChecker
 import com.audioeq.data.GitHubUpdateState
@@ -109,8 +107,9 @@ data class EqUiState(
     val selectedMusicPackages: Set<String> = emptySet(),
     val legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
     val themeMode: String = "light",
-    val seedHex: String = "#006A6A",
+    val seedHex: String = "#9A3412",
     val isSeedFromWallpaper: Boolean = false,
+    val useKnobs: Boolean = false,
     val showSavePresetDialog: Boolean = false,
     val showRootWarningDialog: Boolean = false,
     val showCalibrationSheet: Boolean = false,
@@ -279,9 +278,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.themeMode,
         repository.seedHex,
         repository.wallpaperExtractActive,
-        repository.musicOnlyTracking
-    ) { theme, seed, wall, musicOnly ->
-        Intermediate3B(theme, seed, wall, musicOnly)
+        repository.musicOnlyTracking,
+        repository.useKnobs
+    ) { theme, seed, wall, musicOnly, knobs ->
+        Intermediate3B(theme, seed, wall, musicOnly, knobs)
     }
 
     private val flowP3 = combine(flow3A, flow3B) { a, b ->
@@ -294,7 +294,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             musicOnlyTrackingEnabled = b.musicOnlyTrackingEnabled,
             themeMode = b.themeMode,
             seedHex = b.seedHex,
-            isSeedFromWallpaper = b.isSeedFromWallpaper
+            isSeedFromWallpaper = b.isSeedFromWallpaper,
+            useKnobs = b.useKnobs
         )
     }
 
@@ -519,6 +520,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             themeMode = p3.themeMode,
             seedHex = p3.seedHex,
             isSeedFromWallpaper = p3.isSeedFromWallpaper,
+            useKnobs = p3.useKnobs,
             showSavePresetDialog = p5.showSavePresetDialog,
             showRootWarningDialog = p5.showRootWarningDialog,
             showCalibrationSheet = p5.showCalibrationSheet,
@@ -1057,7 +1059,13 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDialogueEnabled(enabled: Boolean) {
-        repository.updateEnhancerConfig { it.copy(dialogueEnhancerEnabled = enabled) }
+        repository.updateEnhancerConfig { cur ->
+            val nextAmt = if (enabled && cur.dialogueAmount <= 0) 6 else cur.dialogueAmount
+            cur.copy(
+                dialogueEnhancerEnabled = enabled,
+                dialogueAmount = nextAmt
+            )
+        }
     }
 
     fun setDialogueEnhancerEnabled(enabled: Boolean) {
@@ -1065,7 +1073,13 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDialogueAmount(amount: Int) {
-        repository.updateEnhancerConfig { it.copy(dialogueAmount = amount.coerceIn(0, 16)) }
+        val clamped = amount.coerceIn(0, 16)
+        repository.updateEnhancerConfig {
+            it.copy(
+                dialogueEnhancerEnabled = clamped > 0,
+                dialogueAmount = clamped
+            )
+        }
     }
 
     fun updateDialogueAmount(amount: Int) {
@@ -1179,80 +1193,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setSubwooferEnclosure(enclosure: SubwooferEnclosure) {
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferEnclosure = enclosure
-            )
-        }
-    }
-
     fun setSubwooferCrossoverHz(hz: Float) {
         val clamped = hz.coerceIn(55f, 120f)
         repository.updateEnhancerConfig { cur ->
             cur.copy(
                 subwooferCrossoverHz = clamped
-            )
-        }
-    }
-
-    fun setSubwooferPortHz(hz: Float) {
-        val clamped = hz.coerceIn(28f, 55f)
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferPortHz = clamped
-            )
-        }
-    }
-
-    fun setSubwooferDamping(damping: Float) {
-        val clamped = damping.coerceIn(0f, 1f)
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferDamping = clamped
-            )
-        }
-    }
-
-    fun setSubwooferPhaseDeg(phaseDeg: Float) {
-        val clamped = phaseDeg.coerceIn(0f, 180f)
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferPhaseDeg = clamped
-            )
-        }
-    }
-
-    fun setSubwooferWarmth(warmth: Float) {
-        val clamped = warmth.coerceIn(0f, 1f)
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferWarmth = clamped
-            )
-        }
-    }
-
-    fun setSubwooferSubsonicHz(hz: Float) {
-        val clamped = hz.coerceIn(15f, 35f)
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferSubsonicHz = clamped
-            )
-        }
-    }
-
-    fun setSubwooferVocalPriority(enabled: Boolean) {
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferVocalPriority = enabled
-            )
-        }
-    }
-
-    fun setSubwooferRoomMode(mode: SubwooferRoomMode) {
-        repository.updateEnhancerConfig { cur ->
-            cur.copy(
-                subwooferRoomMode = mode
             )
         }
     }
@@ -1576,6 +1521,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.setThemeMode(mode)
     }
 
+    fun setUseKnobs(enabled: Boolean) {
+        repository.setUseKnobs(enabled)
+    }
+
     fun setSeedHex(hex: String, fromWallpaper: Boolean = false) {
         repository.setSeedHex(hex, fromWallpaper)
     }
@@ -1748,7 +1697,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val themeMode: String,
         val seedHex: String,
         val isSeedFromWallpaper: Boolean,
-        val musicOnlyTrackingEnabled: Boolean
+        val musicOnlyTrackingEnabled: Boolean,
+        val useKnobs: Boolean
     )
 
     private data class Intermediate4A(
@@ -1821,7 +1771,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val musicOnlyTrackingEnabled: Boolean,
         val themeMode: String,
         val seedHex: String,
-        val isSeedFromWallpaper: Boolean
+        val isSeedFromWallpaper: Boolean,
+        val useKnobs: Boolean
     )
 
     private data class PartialUiState4(

@@ -1219,6 +1219,7 @@ fun SettingsAndDiagnosticsSheet(
     musicOnlyTrackingEnabled: Boolean = true,
     selectedMusicPackages: Set<String> = emptySet(),
     legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
+    useKnobs: Boolean = false,
     onSelectMode: (EngineMode) -> Unit,
     onSelectLegacyGlobalMixMode: (LegacyGlobalMixMode) -> Unit = {},
     onShizukuAction: () -> Unit,
@@ -1234,6 +1235,7 @@ fun SettingsAndDiagnosticsSheet(
     onClearSelectedMusicPackages: () -> Unit = {},
     onOpenNotificationAccess: () -> Unit = {},
     onSelectThemeMode: (String) -> Unit,
+    onToggleUseKnobs: (Boolean) -> Unit = {},
     onSelectSeedHex: (String, Boolean) -> Unit,
     onSetGithubRepo: (String) -> Unit = {},
     onCheckGithubUpdates: () -> Unit = {},
@@ -2007,6 +2009,17 @@ fun SettingsAndDiagnosticsSheet(
             }
 
             SettingsGroupCard(title = "APPEARANCE") {
+                V7SwitchRow(
+                    title = "Use knobs instead of sliders",
+                    subtitle = "Replaces enhancer & subwoofer sliders with rotary knobs (0 = off)",
+                    checked = useKnobs,
+                    enabled = true,
+                    onCheckedChange = onToggleUseKnobs,
+                    testTag = "use_knobs_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "Theme",

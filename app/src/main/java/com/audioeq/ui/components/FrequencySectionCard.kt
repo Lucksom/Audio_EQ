@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -28,13 +27,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,14 +57,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.audioeq.model.EqConstants
 import com.audioeq.model.OutputRoute
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 import com.audioeq.ui.theme.SpaceGroteskFontFamily
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -97,25 +90,20 @@ fun EqualizerCard(
     val eqActive = masterEnabled && isEnabled
 
     val cardAlpha by animateFloatAsState(
-        targetValue = if (masterEnabled) 1f else 0.45f,
+        targetValue = if (masterEnabled) 1f else 0.55f,
         animationSpec = tween(220),
         label = "eqCardAlpha"
     )
 
     val powerBg by animateColorAsState(
-        targetValue = if (eqActive) palette.primary else palette.sHigh,
-        animationSpec = tween(220),
+        targetValue = if (eqActive) palette.primary else Color(0xFFCBB9AD),
+        animationSpec = tween(200),
         label = "eqPowerBg"
     )
     val powerTint by animateColorAsState(
-        targetValue = if (eqActive) palette.onPrimary else palette.onVar,
-        animationSpec = tween(220),
+        targetValue = palette.onPrimary,
+        animationSpec = tween(200),
         label = "eqPowerTint"
-    )
-    val powerRadius by animateDpAsState(
-        targetValue = if (eqActive) 26.dp else 20.dp,
-        animationSpec = tween(220),
-        label = "eqPowerRadius"
     )
 
     val subtitleText = when {
@@ -129,18 +117,18 @@ fun EqualizerCard(
     val isWarn = ceilingDb > 4.0f
     val meterFillFraction = (ceilingDb / 9.0f).coerceIn(0f, 1f)
     val meterColor by animateColorAsState(
-        targetValue = if (isWarn) palette.warn else palette.primary,
+        targetValue = if (isWarn) palette.warn else palette.secondary,
         animationSpec = tween(180),
         label = "meterColor"
     )
     val ceilTextColor by animateColorAsState(
-        targetValue = if (isWarn) palette.warn else palette.onSurface,
+        targetValue = if (isWarn) palette.warn else palette.primary,
         animationSpec = tween(180),
         label = "ceilTextColor"
     )
 
     val bandsAlpha by animateFloatAsState(
-        targetValue = if (eqActive) 1f else 0.38f,
+        targetValue = if (eqActive) 1f else 0.42f,
         animationSpec = tween(220),
         label = "bandsAlpha"
     )
@@ -151,20 +139,19 @@ fun EqualizerCard(
             .alpha(cardAlpha)
             .border(
                 width = 1.dp,
-                color = palette.outlineV.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(28.dp)
+                color = palette.outlineV,
+                shape = RoundedCornerShape(22.dp)
             )
             .testTag("unified_equalizer_card"),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(22.dp),
         color = palette.sCont
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -177,23 +164,17 @@ fun EqualizerCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-
                     Box(
                         modifier = Modifier
-                            .size(56.dp)
+                            .size(52.dp)
                             .shadow(
-                                elevation = if (eqActive) 10.dp else 0.dp,
-                                shape = RoundedCornerShape(powerRadius),
+                                elevation = if (eqActive) 8.dp else 0.dp,
+                                shape = CircleShape,
                                 ambientColor = palette.glow,
                                 spotColor = palette.glow
                             )
-                            .clip(RoundedCornerShape(powerRadius))
+                            .clip(CircleShape)
                             .background(powerBg)
-                            .border(
-                                width = 1.dp,
-                                color = if (eqActive) Color.Transparent else palette.outlineV,
-                                shape = RoundedCornerShape(powerRadius)
-                            )
                             .clickable(enabled = masterEnabled) { onToggleEnabled(!isEnabled) }
                             .testTag("eq_power_button"),
                         contentAlignment = Alignment.Center
@@ -202,7 +183,7 @@ fun EqualizerCard(
                             imageVector = Icons.Default.PowerSettingsNew,
                             contentDescription = if (eqActive) "Disable Equalizer only" else "Enable Equalizer",
                             tint = powerTint,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
@@ -218,7 +199,7 @@ fun EqualizerCard(
                         )
                         Text(
                             text = subtitleText,
-                            fontSize = 12.sp,
+                            fontSize = 14.sp,
                             color = palette.onVar,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -227,30 +208,19 @@ fun EqualizerCard(
                     }
                 }
 
-                Row(
+                Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
                         .background(palette.tertiaryC)
-                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
                         .testTag("route_badge"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (activeRoute == OutputRoute.SPEAKER) {
-                            Icons.Default.VolumeUp
-                        } else {
-                            Icons.Default.Headphones
-                        },
-                        contentDescription = activeRoute.label,
-                        tint = palette.onTertiaryC,
-                        modifier = Modifier.size(14.dp)
-                    )
                     Text(
                         text = activeRoute.label,
-                        fontFamily = SpaceGroteskFontFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
                         color = palette.onTertiaryC,
                         maxLines = 1
                     )
@@ -262,20 +232,23 @@ fun EqualizerCard(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(palette.sLow)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
                     .testTag("headroom_ceiling_meter"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Headroom",
-                    fontSize = 12.sp,
+                    text = "HEADROOM",
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.4.sp,
                     color = palette.onVar
                 )
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(6.dp)
+                        .height(8.dp)
                         .clip(RoundedCornerShape(999.dp))
                         .background(palette.sTop)
                 ) {
@@ -290,8 +263,8 @@ fun EqualizerCard(
                 Text(
                     text = String.format(Locale.US, "%.1f dB", ceilingDb),
                     fontFamily = JetBrainsMonoFontFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
                     color = ceilTextColor,
                     modifier = Modifier.testTag("ceiling_db_text")
                 )
@@ -326,10 +299,10 @@ fun EqualizerCard(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = title,
-                            fontFamily = SpaceGroteskFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 11.sp,
-                            letterSpacing = 0.9.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 10.5.sp,
+                            letterSpacing = 1.1.sp,
                             color = palette.onVar,
                             textAlign = TextAlign.Center
                         )
@@ -403,7 +376,7 @@ private fun V7VerticalBandSlider(
     val hasGain = abs(effectiveGainDb) > 0.05f
 
     val knobScale by animateFloatAsState(
-        targetValue = if (isDragging) 1.08f else 1.0f,
+        targetValue = if (isDragging) 1.12f else 1.0f,
         animationSpec = tween(120),
         label = "knobScale_$bandIndex"
     )
@@ -413,11 +386,10 @@ private fun V7VerticalBandSlider(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-
         Text(
             text = activeDbText,
             fontFamily = JetBrainsMonoFontFamily,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Medium,
             fontSize = 10.5.sp,
             color = if (hasGain) palette.primary else palette.onVar,
             maxLines = 1,
@@ -442,7 +414,6 @@ private fun V7VerticalBandSlider(
                         lastTapTimeMs = now
 
                         val hPx = size.height.toFloat().coerceAtLeast(1f)
-
                         val enhancerDelta = currentEffGain - (currentUserGain * currentIntensity)
 
                         fun updateFromY(yPx: Float) {
@@ -485,7 +456,7 @@ private fun V7VerticalBandSlider(
 
             Box(
                 modifier = Modifier
-                    .width(6.dp)
+                    .width(8.dp)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(999.dp))
                     .background(palette.sTop)
@@ -493,8 +464,9 @@ private fun V7VerticalBandSlider(
 
             Box(
                 modifier = Modifier
-                    .width(14.dp)
-                    .height(1.dp)
+                    .width(16.dp)
+                    .height(2.dp)
+                    .clip(RoundedCornerShape(1.dp))
                     .background(palette.outline)
             )
 
@@ -503,10 +475,10 @@ private fun V7VerticalBandSlider(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .offset(y = railHeight * topFraction)
-                        .width(6.dp)
+                        .width(8.dp)
                         .height(railHeight * fillFraction)
                         .clip(RoundedCornerShape(999.dp))
-                        .background(palette.primary)
+                        .background(palette.secondary)
                 )
             }
 
@@ -514,12 +486,12 @@ private fun V7VerticalBandSlider(
                 modifier = Modifier
                     .offset(y = knobYOffset)
                     .scale(knobScale)
-                    .width(28.dp)
-                    .height(16.dp)
-                    .shadow(4.dp, RoundedCornerShape(9.dp))
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (isDragging) palette.primary else palette.onPrimary)
-                    .border(2.dp, palette.primary, RoundedCornerShape(9.dp))
+                    .width(26.dp)
+                    .height(18.dp)
+                    .shadow(4.dp, RoundedCornerShape(999.dp))
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.onPrimary)
+                    .border(2.5.dp, palette.primary, RoundedCornerShape(999.dp))
             )
         }
 
@@ -551,7 +523,7 @@ fun ToneCard(
 ) {
     val palette = LocalMonetPalette.current
     val cardAlpha by animateFloatAsState(
-        targetValue = if (masterEnabled) 1f else 0.45f,
+        targetValue = if (masterEnabled) 1f else 0.55f,
         animationSpec = tween(220),
         label = "toneCardAlpha"
     )
@@ -562,20 +534,19 @@ fun ToneCard(
             .alpha(cardAlpha)
             .border(
                 width = 1.dp,
-                color = palette.outlineV.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(28.dp)
+                color = palette.outlineV,
+                shape = RoundedCornerShape(22.dp)
             )
             .testTag("tone_card"),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(22.dp),
         color = palette.sCont
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -583,12 +554,12 @@ fun ToneCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(44.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(palette.primaryC),
                     contentAlignment = Alignment.Center
                 ) {
-                    val iconColor = palette.onPrimaryC
+                    val iconColor = palette.primary
                     Canvas(modifier = Modifier.size(20.dp)) {
                         val w = size.width
                         val h = size.height
@@ -616,13 +587,13 @@ fun ToneCard(
                         text = "Tone",
                         fontFamily = SpaceGroteskFontFamily,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         letterSpacing = (-0.2).sp,
                         color = palette.onSurface
                     )
                     Text(
                         text = "Tilt, intensity and contour",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.onVar
                     )
                 }
@@ -630,7 +601,7 @@ fun ToneCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 ToneTiltMiniCard(
                     label = "Bass tilt",
@@ -658,7 +629,7 @@ fun ToneCard(
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -667,14 +638,14 @@ fun ToneCard(
                 ) {
                     Text(
                         text = "Intensity",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.onVar
                     )
                     Text(
                         text = String.format(Locale.US, "%.1f×", intensity),
                         fontFamily = JetBrainsMonoFontFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
                         color = palette.primary,
                         modifier = Modifier.testTag("intensity_value_text")
                     )
@@ -697,7 +668,7 @@ fun ToneCard(
                 )
             }
 
-            HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+            HorizontalDivider(color = palette.outlineV)
 
             V7SwitchRow(
                 title = "Volume contour",
@@ -707,6 +678,8 @@ fun ToneCard(
                 onCheckedChange = onToggleVolumeContour,
                 testTag = "volume_contour_switch"
             )
+
+            HorizontalDivider(color = palette.outlineV)
 
             V7SwitchRow(
                 title = "A/B loudness compare",
@@ -738,48 +711,23 @@ private fun ToneTiltMiniCard(
 
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(palette.sLow)
-            .border(1.dp, palette.outlineV.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                fontSize = 12.sp,
-                color = palette.onVar,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = formattedVal,
-                fontFamily = JetBrainsMonoFontFamily,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp,
-                color = palette.primary,
-                maxLines = 1
-            )
-        }
-        Slider(
+        AudioTrackSlider(
+            label = label,
+            valueText = formattedVal,
             value = valueDb,
-            onValueChange = onValueChange,
             valueRange = -6f..6f,
-            steps = 23,
+            step = 0.5f,
+            bipolar = true,
+            defaultValue = 0f,
             enabled = enabled,
-            colors = SliderDefaults.colors(
-                thumbColor = palette.primary,
-                activeTrackColor = palette.primary,
-                inactiveTrackColor = palette.sTop
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(28.dp)
-                .testTag(testTag)
+            valueColor = palette.onSurface,
+            onValueChange = onValueChange,
+            testTag = testTag
         )
     }
 }
@@ -796,9 +744,8 @@ fun <T> V7SegmentedRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(palette.sLow)
-            .border(1.dp, palette.outlineV.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -818,18 +765,17 @@ fun <T> V7SegmentedRow(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(bg)
                     .clickable(enabled = enabled) { onSelect(value) }
-                    .padding(horizontal = 6.dp),
+                    .padding(vertical = 10.dp, horizontal = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label,
                     fontFamily = SpaceGroteskFontFamily,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    fontSize = 12.5.sp,
+                    fontSize = 13.sp,
                     color = fg,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -865,13 +811,14 @@ fun V7SwitchRow(
         ) {
             Text(
                 text = title,
+                fontFamily = SpaceGroteskFontFamily,
                 fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
+                fontSize = 15.sp,
                 color = palette.onSurface
             )
             Text(
                 text = subtitle,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.onVar
             )
         }
@@ -893,41 +840,32 @@ fun V7PillSwitch(
 ) {
     val palette = LocalMonetPalette.current
     val trackBg by animateColorAsState(
-        targetValue = if (checked) palette.primary else palette.sTop,
+        targetValue = if (checked) palette.primary else Color(0xFFD5C6BC),
         animationSpec = tween(180),
         label = "swTrackBg"
     )
-    val thumbColor by animateColorAsState(
-        targetValue = if (checked) palette.onPrimary else palette.outline,
-        animationSpec = tween(180),
-        label = "swThumbColor"
-    )
     val thumbOffset by animateDpAsState(
-        targetValue = if (checked) 23.dp else 4.dp,
+        targetValue = if (checked) 28.dp else 4.dp,
         animationSpec = tween(180),
         label = "swThumbOffset"
     )
 
     Box(
         modifier = modifier
-            .width(50.dp)
-            .height(30.dp)
+            .width(58.dp)
+            .height(34.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(trackBg)
-            .border(
-                width = 1.dp,
-                color = if (checked) palette.primary else palette.outline,
-                shape = RoundedCornerShape(999.dp)
-            )
             .clickable(enabled = enabled) { onCheckedChange(!checked) },
         contentAlignment = Alignment.CenterStart
     ) {
         Box(
             modifier = Modifier
                 .offset(x = thumbOffset)
-                .size(20.dp)
+                .size(26.dp)
+                .shadow(2.dp, CircleShape)
                 .clip(CircleShape)
-                .background(thumbColor)
+                .background(Color.White)
         )
     }
 }

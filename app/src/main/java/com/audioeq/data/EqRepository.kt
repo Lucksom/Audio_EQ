@@ -108,6 +108,11 @@ class EqRepository(context: Context) {
     private val _githubRepo = MutableStateFlow(loadInitialGithubRepo())
     val githubRepo: StateFlow<String> = _githubRepo.asStateFlow()
 
+    private val _useKnobs = MutableStateFlow(
+        prefs.getBoolean(KEY_USE_KNOBS, false)
+    )
+    val useKnobs: StateFlow<Boolean> = _useKnobs.asStateFlow()
+
     private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
         when (key) {
             KEY_MASTER_ENABLED -> _masterEnabled.value = sp.getBoolean(KEY_MASTER_ENABLED, true)
@@ -134,11 +139,12 @@ class EqRepository(context: Context) {
         private const val KEY_TRANSIENT_MODE = "transient_mode"
         private const val KEY_USB_BIT_PERFECT = "usb_bit_perfect"
         private const val KEY_LEGACY_GLOBAL_MIX_MODE = "legacy_global_mix_mode"
-        private const val KEY_THEME_MODE = "theme_mode"
-        private const val KEY_SEED_HEX = "seed_hex_v2"
+        private const val KEY_THEME_MODE = "theme_mode_v3"
+        private const val KEY_SEED_HEX = "seed_hex_v3"
         private const val KEY_WALLPAPER_EXTRACT = "wallpaper_extract"
         private const val KEY_MUSIC_ONLY_TRACKING = "music_only_tracking"
         private const val KEY_GITHUB_REPO = "github_repo"
+        private const val KEY_USE_KNOBS = "use_knobs_mode"
     }
 
     private fun loadInitialGithubRepo(): String {
@@ -258,6 +264,11 @@ class EqRepository(context: Context) {
         prefs.edit().putString(KEY_THEME_MODE, normalized).apply()
         dbHelper.setSetting(KEY_THEME_MODE, normalized)
         _themeMode.value = normalized
+    }
+
+    fun setUseKnobs(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_KNOBS, enabled).apply()
+        _useKnobs.value = enabled
     }
 
     fun setSeedHex(hex: String, fromWallpaper: Boolean = false) {
