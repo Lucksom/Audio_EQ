@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SpatialAudioOff
@@ -43,10 +42,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,12 +50,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
-import com.audioeq.audio.IeqPreset
+import com.audioeq.audio.SubwooferEnclosure
+import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.ui.theme.LocalMonetPalette
 import java.util.Locale
@@ -76,8 +74,6 @@ fun EnhancerCard(
     onBassBoostChange: (Float) -> Unit = {},
     onToggleVirtualBass: (Boolean) -> Unit = {},
     onVirtualBassStrengthChange: (Float) -> Unit = {},
-    onSelectIeqPreset: (IeqPreset) -> Unit = {},
-    onIeqAmountChange: (Int) -> Unit = {},
     onToggleDialogue: (Boolean) -> Unit = {},
     onDialogueAmountChange: (Int) -> Unit = {},
     onToggleSurround: (Boolean) -> Unit = {},
@@ -85,8 +81,6 @@ fun EnhancerCard(
     onResetAll: () -> Unit = {}
 ) {
     val palette = LocalMonetPalette.current
-    var showDeepBassMath by remember { mutableStateOf(false) }
-    var showVirtualBassInfo by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
@@ -140,7 +134,7 @@ fun EnhancerCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Adaptive profiles · Deep Bass · Virtual Bass · 20-Band IEQ",
+                            text = "Adaptive profiles · Deep Bass · Bass Enhancer · Virtual Bass",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = palette.textMuted,
                                 fontSize = 11.sp
@@ -296,97 +290,18 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = Icons.Default.GraphicEq,
                 title = "Deep Bass",
-                subtitle = "3-Stage Sub-Bass Engine: 38 Hz Resonant DC Shelf + 47 Hz Peak + Dynamic Envelope Booster",
-                badgeText = if (deepBassActive) "3-STAGE DC" else "STD PEAK",
+                subtitle = "Resonant sub-bass shelf & dynamic kick envelope booster",
+                badgeText = if (deepBassActive) "ON" else "OFF",
                 checked = deepBassActive,
                 enabled = enabled,
                 onCheckedChange = onToggleDeepBass,
                 testTag = "enhancer_deep_bass_switch"
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "38 Hz Q=0.90 DC shelf + 47 Hz Q=1.15 peak + 210 Hz anti-mud pocket",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = palette.textSecondary,
-                                fontSize = 11.sp
-                            ),
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = if (showDeepBassMath) "Hide info" else "How it works",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = palette.primary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.sp
-                            ),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { showDeepBassMath = !showDeepBassMath }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                .testTag("deep_bass_info_toggle")
-                        )
-                    }
-
-                    AnimatedVisibility(
-                        visible = showDeepBassMath,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            color = palette.surface2.copy(alpha = 0.78f),
-                            border = BorderStroke(1.dp, palette.borderSubtle)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = "3-Stage Deep Bass Architecture:",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.primary
-                                    )
-                                )
-                                Text(
-                                    text = "• Stage A (0–38 Hz Resonant DC Low-Shelf): Uses fc = 38 Hz, Q = 0.90 (+4.5 dB offset) for a tight sub-infra lift from 15 Hz to 42 Hz with a clean dip above the shelf.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                                Text(
-                                    text = "• Stage B (47 Hz Sub-Bass Peak + 210 Hz Anti-Mud): Shifts Band 1 to 47 Hz (Q = 1.15, +3.5 dB) and carves a -2.5 dB pocket at 210 Hz (Q = 1.40) so vocals stay clear.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                                Text(
-                                    text = "• Stage C (Sub-110 Hz Dynamic Envelope Booster): Applies upward sub-bass expansion and warm harmonic saturation on kick transients.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            )
 
             EnhancerModuleContainer(
                 icon = Icons.Default.Speaker,
                 title = "Bass Enhancer",
-                subtitle = "Full-power 0–6 dB low-shelf + dynamic MBC transient punch (zero volume ducking)",
+                subtitle = "Low-shelf punch & dynamic transient boost",
                 badgeText = if (config.bassEnabled) {
                     String.format(Locale.US, "+%.1f dB", config.bassBoostDb)
                 } else "OFF",
@@ -460,31 +375,13 @@ fun EnhancerCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .padding(end = 8.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { showVirtualBassInfo = !showVirtualBassInfo }
-                                .padding(vertical = 2.dp)
-                                .testTag("virtual_bass_info_toggle")
-                        ) {
-                            Text(
-                                text = "Harmonic Overtones (2×/3×/4×)",
-                                style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Virtual Bass info",
-                                tint = palette.primary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                        Text(
+                            text = "Harmonic Overtones",
+                            style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
                         Text(
                             text = String.format(
                                 Locale.US,
@@ -499,46 +396,6 @@ fun EnhancerCard(
                             ),
                             maxLines = 1
                         )
-                    }
-
-                    AnimatedVisibility(
-                        visible = showVirtualBassInfo,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            color = palette.surface2.copy(alpha = 0.75f),
-                            border = BorderStroke(1.dp, palette.borderSubtle)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = "Why Speaker Turns Virtual Bass ON & Headphones Turn It OFF:",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.primary
-                                    )
-                                )
-                                Text(
-                                    text = "• Missing Fundamental: Deep sub-bass that small phone speakers physically cannot reproduce without clipping.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                                Text(
-                                    text = "• Harmonic Series (H2, H3, H4): 2×, 3×, and 4× overtones that let your ear perceive the deep sub-bass pitch on small speakers.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                            }
-                        }
                     }
 
                     Slider(
@@ -559,159 +416,10 @@ fun EnhancerCard(
                 }
             }
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                color = palette.surface1,
-                border = BorderStroke(
-                    width = 1.dp,
-                    color = if (config.ieqPreset != IeqPreset.OFF) palette.primary.copy(alpha = 0.5f) else palette.borderSubtle
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.GraphicEq,
-                                contentDescription = "Intelligent EQ",
-                                tint = if (config.ieqPreset != IeqPreset.OFF) palette.primary else palette.textMuted,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column {
-                                Text(
-                                    text = "Intelligent EQ (20-Band IEQ)",
-                                    style = MaterialTheme.typography.labelLarge.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.textPrimary
-                                    )
-                                )
-                                Text(
-                                    text = config.ieqPreset.subtitle,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textMuted,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                            }
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (config.ieqPreset != IeqPreset.OFF) palette.primaryContainer else palette.surface2
-                        ) {
-                            Text(
-                                text = if (config.ieqPreset != IeqPreset.OFF) {
-                                    "μ=${String.format(Locale.US, "%.2f", config.ieqAmount / 16f)}"
-                                } else "OFF",
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (config.ieqPreset != IeqPreset.OFF) palette.onPrimaryContainer else palette.textMuted
-                                )
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        IeqPreset.entries.forEach { preset ->
-                            val selected = config.ieqPreset == preset
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (selected) palette.primary else palette.surface2,
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (selected) palette.primary else palette.borderSubtle
-                                ),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable(enabled = enabled) { onSelectIeqPreset(preset) }
-                                    .testTag("ieq_chip_${preset.id}")
-                            ) {
-                                Text(
-                                    text = preset.label,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (selected) palette.onPrimary else palette.textSecondary
-                                    )
-                                )
-                            }
-                        }
-                    }
-
-                    AnimatedVisibility(
-                        visible = config.ieqPreset != IeqPreset.OFF,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Target Steering Strength (Amount 1–16)",
-                                    style = MaterialTheme.typography.labelSmall.copy(color = palette.textSecondary),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "${config.ieqAmount} / 16 (${(config.ieqAmount * 100) / 16}%)",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.primary
-                                    ),
-                                    maxLines = 1
-                                )
-                            }
-                            Slider(
-                                value = config.ieqAmount.toFloat(),
-                                onValueChange = { onIeqAmountChange(it.roundToInt().coerceIn(1, 16)) },
-                                valueRange = 1f..16f,
-                                steps = 14,
-                                enabled = enabled,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = palette.primary,
-                                    activeTrackColor = palette.primary,
-                                    inactiveTrackColor = palette.surface2
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(28.dp)
-                                    .testTag("enhancer_ieq_amount_slider")
-                            )
-                        }
-                    }
-                }
-            }
-
             EnhancerModuleContainer(
                 icon = Icons.Default.RecordVoiceOver,
                 title = "Dialogue Enhancer",
-                subtitle = "Vocal formant clarity boost + low-mid mud unmasking",
+                subtitle = "Vocal formant clarity boost & low-mid mud unmasking",
                 badgeText = if (config.dialogueEnhancerEnabled) {
                     String.format(Locale.US, "+%.1f dB", (config.dialogueAmount / 16f) * 10f)
                 } else "OFF",
@@ -773,7 +481,7 @@ fun EnhancerCard(
             EnhancerModuleContainer(
                 icon = if (config.surroundEnabled) Icons.Default.SurroundSound else Icons.Default.SpatialAudioOff,
                 title = "3D Surround Virtualizer",
-                subtitle = "Binaural HRTF pinna contour & M/S crossfeed (sub-bass phase locked)",
+                subtitle = "Binaural spatial soundstage & crossfeed",
                 badgeText = if (config.surroundEnabled) {
                     "${(config.surroundWidth * 100).roundToInt()}%"
                 } else "OFF",
@@ -839,7 +547,7 @@ private fun EnhancerModuleContainer(
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     testTag: String,
-    content: @Composable () -> Unit
+    content: (@Composable () -> Unit)? = null
 ) {
     val palette = LocalMonetPalette.current
     Surface(
@@ -933,12 +641,14 @@ private fun EnhancerModuleContainer(
                 )
             }
 
-            AnimatedVisibility(
-                visible = checked,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                content()
+            if (content != null) {
+                AnimatedVisibility(
+                    visible = checked,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
+                ) {
+                    content()
+                }
             }
         }
     }
@@ -948,14 +658,42 @@ private fun EnhancerModuleContainer(
 fun SubwooferCard(
     config: EnhancerConfig,
     enabled: Boolean = true,
+    liveSpectrum31: List<Float> = emptyList(),
+    gainReduction6: List<Float> = emptyList(),
     onToggleSubwoofer: (Boolean) -> Unit = {},
     onSubwooferIntensityChange: (Float) -> Unit = {},
     onSubwooferSubOctaveChange: (Float) -> Unit = {},
-    onToggleSubwooferAutoLoudness: (Boolean) -> Unit = {}
+    onToggleSubwooferAutoLoudness: (Boolean) -> Unit = {},
+    onSelectEnclosure: (SubwooferEnclosure) -> Unit = {},
+    onCrossoverHzChange: (Float) -> Unit = {},
+    onPortHzChange: (Float) -> Unit = {},
+    onDampingChange: (Float) -> Unit = {},
+    onPhaseDegChange: (Float) -> Unit = {},
+    onWarmthChange: (Float) -> Unit = {},
+    onSubsonicHzChange: (Float) -> Unit = {},
+    onToggleVocalPriority: (Boolean) -> Unit = {},
+    onSelectRoomMode: (SubwooferRoomMode) -> Unit = {}
 ) {
     val palette = LocalMonetPalette.current
-    var showSubwooferInfo by remember { mutableStateOf(false) }
     val subActive = config.subwooferEnabled
+
+    val subPeakDbfs = remember(liveSpectrum31, subActive, config.subwooferIntensity) {
+        if (!subActive) {
+            -60.0f
+        } else {
+            val rawSubPeak = (0..7).maxOfOrNull { idx -> liveSpectrum31.getOrElse(idx) { -54.0f } } ?: -42.0f
+            (rawSubPeak + config.subwooferIntensity * 8.0f).coerceIn(-60.0f, 0.0f)
+        }
+    }
+    val excursionAbsorbedDb = remember(gainReduction6, subActive, config.subwooferSubsonicHz, config.subwooferIntensity) {
+        if (!subActive) {
+            0.0f
+        } else {
+            val mbcGr = kotlin.math.abs(gainReduction6.getOrElse(0) { 0f })
+            val guardDb = ((config.subwooferSubsonicHz - 15f) * 0.22f + config.subwooferIntensity * 1.4f + mbcGr)
+            guardDb.coerceIn(0.4f, 12.0f)
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -1035,7 +773,7 @@ fun SubwooferCard(
                             }
                         }
                         Text(
-                            text = "38/48 Hz Dual Helmholtz Port · 58/135 Hz Dual-Chamber MBC · LR4 Sub-Octave",
+                            text = "${config.subwooferEnclosure.label} · ${config.subwooferRoomMode.label}",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = palette.textMuted,
                                 fontSize = 11.sp
@@ -1058,6 +796,85 @@ fun SubwooferCard(
                     ),
                     modifier = Modifier.testTag("subwoofer_master_switch")
                 )
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("subwoofer_telemetry_strip"),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surface2.copy(alpha = if (subActive) 0.9f else 0.5f),
+                border = BorderStroke(1.dp, if (subActive) palette.primary.copy(alpha = 0.35f) else palette.borderSubtle)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.Start) {
+                        Text(
+                            text = "SUB RMS / PEAK",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                color = palette.textMuted,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        Text(
+                            text = if (subActive) String.format(Locale.US, "%.1f dB", subPeakDbfs) else "STANDBY",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = if (subActive) palette.primary else palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "SUB-OCTAVE LOCK",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                color = palette.textMuted,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        Text(
+                            text = if (subActive && config.subwooferSubOctaveMix > 0.01f) {
+                                "${(config.subwooferSubOctaveMix * 100).roundToInt()}% ACTIVE"
+                            } else "BYPASS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = if (subActive && config.subwooferSubOctaveMix > 0.01f) palette.textPrimary else palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "EXCURSION GUARD",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                color = palette.textMuted,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        Text(
+                            text = if (subActive) {
+                                String.format(Locale.US, "-%.1f dB", excursionAbsorbedDb)
+                            } else "IDLE",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = if (subActive) palette.primary else palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                }
             }
 
             Surface(
@@ -1085,7 +902,7 @@ fun SubwooferCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Cabinet Drive & Port Slam (38 Hz / 48 Hz)",
+                                text = "Cabinet Drive & Port Slam",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = palette.textSecondary,
                                     fontWeight = FontWeight.SemiBold
@@ -1138,7 +955,7 @@ fun SubwooferCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Sub-Octave Synthesizer (f/2 Fundamental)",
+                                text = "Sub-Octave Synthesizer",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = palette.textSecondary,
                                     fontWeight = FontWeight.SemiBold
@@ -1219,86 +1036,482 @@ fun SubwooferCard(
                         )
                     }
 
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Enclosure Alignment",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                            Text(
+                                text = config.subwooferEnclosure.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    color = palette.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SubwooferEnclosure.entries.forEach { enc ->
+                                val selected = config.subwooferEnclosure == enc
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (selected) palette.primary else palette.surface2,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) palette.primary else palette.borderSubtle
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable(enabled = enabled && subActive) { onSelectEnclosure(enc) }
+                                        .testTag("subwoofer_enclosure_${enc.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = enc.label,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (selected) palette.onPrimary else palette.textPrimary
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Text(
+                                            text = enc.badge,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 9.sp,
+                                                color = if (selected) palette.onPrimary.copy(alpha = 0.85f) else palette.textMuted
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Low-Pass Crossover",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val lpfPct = (((config.subwooferCrossoverHz - 55f) / 65f) * 100f).roundToInt().coerceIn(0, 100)
+                            Text(
+                                text = "$lpfPct%",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferCrossoverHz.coerceIn(55f, 120f),
+                            onValueChange = onCrossoverHzChange,
+                            valueRange = 55f..120f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_crossover_slider")
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Port Tuning",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val portPct = (((config.subwooferPortHz - 28f) / 27f) * 100f).roundToInt().coerceIn(0, 100)
+                            Text(
+                                text = "$portPct%",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferPortHz.coerceIn(28f, 55f),
+                            onValueChange = onPortHzChange,
+                            valueRange = 28f..55f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_port_hz_slider")
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Cone Damping / Servo Tightness",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val dampingLabel = when {
+                                config.subwooferDamping < 0.35f -> "Boomy (${(config.subwooferDamping * 100).roundToInt()}%)"
+                                config.subwooferDamping > 0.70f -> "Servo Tight (${(config.subwooferDamping * 100).roundToInt()}%)"
+                                else -> "Balanced (${(config.subwooferDamping * 100).roundToInt()}%)"
+                            }
+                            Text(
+                                text = dampingLabel,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferDamping.coerceIn(0f, 1f),
+                            onValueChange = onDampingChange,
+                            valueRange = 0f..1f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_damping_slider")
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Phase Alignment",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val phasePct = ((config.subwooferPhaseDeg / 180f) * 100f).roundToInt().coerceIn(0, 100)
+                            Text(
+                                text = "$phasePct%",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferPhaseDeg.coerceIn(0f, 180f),
+                            onValueChange = onPhaseDegChange,
+                            valueRange = 0f..180f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_phase_slider")
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Harmonic Warmth / Tube Saturation",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "${(config.subwooferWarmth * 100).roundToInt()}% Drive",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferWarmth.coerceIn(0f, 1f),
+                            onValueChange = onWarmthChange,
+                            valueRange = 0f..1f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_warmth_slider")
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Subsonic Excursion Guard",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val guardPct = (((config.subwooferSubsonicHz - 15f) / 20f) * 100f).roundToInt().coerceIn(0, 100)
+                            Text(
+                                text = "$guardPct%",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.primary
+                                )
+                            )
+                        }
+                        Slider(
+                            value = config.subwooferSubsonicHz.coerceIn(15f, 35f),
+                            onValueChange = onSubsonicHzChange,
+                            valueRange = 15f..35f,
+                            enabled = enabled && subActive,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("subwoofer_subsonic_slider")
+                        )
+                    }
+
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "22 Hz LR4 Excursion Guard · 185/240 Hz Trunk Isolation Carve",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = palette.textMuted,
-                                fontSize = 10.sp
-                            ),
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = if (showSubwooferInfo) "Hide specs" else "Architecture",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = palette.primary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.sp
-                            ),
+                        Column(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { showSubwooferInfo = !showSubwooferInfo }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                .testTag("subwoofer_info_toggle")
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                        ) {
+                            Text(
+                                text = "Anti-IMD Vocal Priority",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textPrimary
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Automatically ducks upper-bass when vocals are active",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = palette.textMuted,
+                                    fontSize = 11.sp
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Switch(
+                            checked = config.subwooferVocalPriority,
+                            onCheckedChange = onToggleVocalPriority,
+                            enabled = enabled && subActive,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = palette.onPrimary,
+                                checkedTrackColor = palette.primary,
+                                uncheckedThumbColor = palette.textMuted,
+                                uncheckedTrackColor = palette.surface2
+                            ),
+                            modifier = Modifier.testTag("subwoofer_vocal_priority_switch")
                         )
                     }
 
-                    AnimatedVisibility(
-                        visible = showSubwooferInfo,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
+                    HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Surface(
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            color = palette.surface2.copy(alpha = 0.8f),
-                            border = BorderStroke(1.dp, palette.borderSubtle)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(
-                                modifier = Modifier.padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = "5-Stage Physical Subwoofer Architecture:",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.primary
-                                    )
+                            Text(
+                                text = "Cabin Pressurization / Room Bloom",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = palette.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                Text(
-                                    text = "• 24 dB/oct Infrasonic Excursion Guard (22 Hz): Blocks inaudible <20 Hz DC cone-flapping to preserve driver headroom.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
+                            )
+                            Text(
+                                text = config.subwooferRoomMode.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    color = palette.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
                                 )
-                                Text(
-                                    text = "• Dual-Stage Helmholtz Ported Cabinet: 38 Hz (Q=1.85) deep air resonance + 48 Hz (Q=1.40) physical chest slam.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                                Text(
-                                    text = "• Dual-Chamber Subwoofer MBC (0–58 Hz & 58–135 Hz): Upward expansion (1.35:1) + 55 ms / 25 ms transient attack & Post-EQ sub-port lift.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
-                                Text(
-                                    text = "• Trunk Isolation Mud Carve (185 Hz & 240 Hz): Surgical notch + 135–320 Hz dynamic mud suppressor keeps vocals crystal-clear.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                )
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SubwooferRoomMode.entries.forEach { mode ->
+                                val selected = config.subwooferRoomMode == mode
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (selected) palette.primary else palette.surface2,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) palette.primary else palette.borderSubtle
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable(enabled = enabled && subActive) { onSelectRoomMode(mode) }
+                                        .testTag("subwoofer_room_mode_${mode.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = mode.label,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (selected) palette.onPrimary else palette.textPrimary
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Text(
+                                            text = mode.badge,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 9.sp,
+                                                color = if (selected) palette.onPrimary.copy(alpha = 0.85f) else palette.textMuted
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

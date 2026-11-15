@@ -18,9 +18,10 @@ import com.audioeq.audio.DspReferenceMonitor
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.EqualizerNotificationHelper
-import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.IndexEntry
 import com.audioeq.audio.MusicAppTracker
+import com.audioeq.audio.SubwooferEnclosure
+import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.data.EqRepository
 import com.audioeq.data.GitHubUpdateChecker
 import com.audioeq.data.GitHubUpdateState
@@ -1055,22 +1056,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectIeqPreset(preset: IeqPreset) {
-        repository.updateEnhancerConfig { it.copy(ieqPreset = preset) }
-    }
-
-    fun setIeqPreset(preset: IeqPreset) {
-        selectIeqPreset(preset)
-    }
-
-    fun setIeqAmount(amount: Int) {
-        repository.updateEnhancerConfig { it.copy(ieqAmount = amount.coerceIn(0, 16)) }
-    }
-
-    fun updateIeqAmount(amount: Int) {
-        setIeqAmount(amount)
-    }
-
     fun setDialogueEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { it.copy(dialogueEnhancerEnabled = enabled) }
     }
@@ -1190,6 +1175,84 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.updateEnhancerConfig { cur ->
             cur.copy(
                 subwooferAutoLoudness = enabled
+            )
+        }
+    }
+
+    fun setSubwooferEnclosure(enclosure: SubwooferEnclosure) {
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferEnclosure = enclosure
+            )
+        }
+    }
+
+    fun setSubwooferCrossoverHz(hz: Float) {
+        val clamped = hz.coerceIn(55f, 120f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferCrossoverHz = clamped
+            )
+        }
+    }
+
+    fun setSubwooferPortHz(hz: Float) {
+        val clamped = hz.coerceIn(28f, 55f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferPortHz = clamped
+            )
+        }
+    }
+
+    fun setSubwooferDamping(damping: Float) {
+        val clamped = damping.coerceIn(0f, 1f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferDamping = clamped
+            )
+        }
+    }
+
+    fun setSubwooferPhaseDeg(phaseDeg: Float) {
+        val clamped = phaseDeg.coerceIn(0f, 180f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferPhaseDeg = clamped
+            )
+        }
+    }
+
+    fun setSubwooferWarmth(warmth: Float) {
+        val clamped = warmth.coerceIn(0f, 1f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferWarmth = clamped
+            )
+        }
+    }
+
+    fun setSubwooferSubsonicHz(hz: Float) {
+        val clamped = hz.coerceIn(15f, 35f)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferSubsonicHz = clamped
+            )
+        }
+    }
+
+    fun setSubwooferVocalPriority(enabled: Boolean) {
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferVocalPriority = enabled
+            )
+        }
+    }
+
+    fun setSubwooferRoomMode(mode: SubwooferRoomMode) {
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                subwooferRoomMode = mode
             )
         }
     }

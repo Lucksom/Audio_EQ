@@ -28,7 +28,7 @@ class AudioEqRobolectricTest {
     }
 
     @Test
-    fun `verify sqlite database seeds presets and ieq tables`() {
+    fun `verify sqlite database seeds presets and subwoofer settings`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val dbHelper = EqualizerDatabaseHelper(context)
         val db = dbHelper.readableDatabase
@@ -38,9 +38,9 @@ class AudioEqRobolectricTest {
             assertEquals(9, c.getInt(0))
         }
 
-        db.rawQuery("SELECT COUNT(*) FROM ieq_profiles", null).use { c ->
+        db.rawQuery("SELECT COUNT(*) FROM dsp_mathematical_models", null).use { c ->
             assertTrue(c.moveToFirst())
-            assertEquals(20, c.getInt(0))
+            assertEquals(4, c.getInt(0))
         }
         dbHelper.close()
     }

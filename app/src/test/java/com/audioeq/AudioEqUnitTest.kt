@@ -8,8 +8,9 @@ import com.audioeq.audio.DspV4Engine
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.Enhancers
-import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.MidSideProcessor
+import com.audioeq.audio.SubwooferEnclosure
+import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqMode
 import com.audioeq.model.HeadphoneProfile
@@ -101,9 +102,6 @@ class AudioEqUnitTest {
 
         val dynBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.BLUETOOTH)
         assertFalse(dynBt.virtualBassAuto)
-        assertTrue(dynBt.ieqEnabled)
-        assertEquals(IeqPreset.BALANCED, dynBt.ieqPreset)
-        assertEquals(6, dynBt.ieqAmount)
         assertTrue(dynBt.deEnabled)
         assertEquals(4, dynBt.deAmount)
         assertEquals(256, dynBt.peakQ8)
@@ -111,16 +109,12 @@ class AudioEqUnitTest {
 
         val vidSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.SPEAKER)
         assertTrue(vidSpk.virtualBassAuto)
-        assertEquals(IeqPreset.DETAILED, vidSpk.ieqPreset)
-        assertEquals(12, vidSpk.ieqAmount)
         assertEquals(5, vidSpk.deAmount)
         assertEquals(241, vidSpk.peakQ8)
         assertEquals(32, vidSpk.volmaxQ4)
 
         val vidHp = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.HEADPHONES)
         assertFalse(vidHp.virtualBassAuto)
-        assertEquals(IeqPreset.DETAILED, vidHp.ieqPreset)
-        assertEquals(13, vidHp.ieqAmount)
         assertEquals(4, vidHp.deAmount)
         assertEquals(256, vidHp.peakQ8)
         assertEquals(48, vidHp.volmaxQ4)
@@ -128,7 +122,6 @@ class AudioEqUnitTest {
         assertTrue(vidHp.virtualizerEnabled)
 
         val vidBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.BLUETOOTH)
-        assertFalse("BT Video disables IEQ to avoid A2DP lip-sync latency", vidBt.ieqEnabled)
         assertTrue(vidBt.deEnabled)
         assertEquals(4, vidBt.deAmount)
 
@@ -136,11 +129,6 @@ class AudioEqUnitTest {
         assertTrue(musSpk.virtualBassAuto)
         assertEquals(16, musSpk.volmaxQ4)
         assertEquals(241, musSpk.peakQ8)
-
-        val musBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.MUSIC, OutputRoute.BLUETOOTH)
-        assertTrue("BT Music enables Balanced IEQ (amt=6) to compensate for lossy BT compression", musBt.ieqEnabled)
-        assertEquals(IeqPreset.BALANCED, musBt.ieqPreset)
-        assertEquals(6, musBt.ieqAmount)
     }
 
     @Test
@@ -229,20 +217,34 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verify20BandIeqTargetVectors() {
-        assertEquals(20, EnhancerDsp.IEQ_FREQS_20.size)
-        assertArrayEquals(
-            intArrayOf(-50, 5, 19, 25, 29, 44, 52, 57, 56, 56, 61, 69, 77, 78, 72, 74, 48, 22, -2, -59),
-            IeqPreset.DETAILED.targetsQ4
+    fun verifySubwooferAllPassPhaseRotatorAnd13ParameterArchitecture() {
+        val coeff60 = EnhancerDsp.computeAllPassCoefficient(60.0, 48000.0)
+        val coeff100 = EnhancerDsp.computeAllPassCoefficient(100.0, 48000.0)
+        assertTrue("All-pass coefficient must be negative for sub-100 Hz at 48 kHz", coeff60 < -0.98 && coeff60 > -1.0)
+        assertTrue("Higher phase frequency must increase all-pass coefficient", coeff100 > coeff60)
+
+        val portedCfg = EnhancerConfig(
+            subwooferEnabled = true,
+            subwooferIntensity = 1.0f,
+            subwooferEnclosure = SubwooferEnclosure.PORTED,
+            subwooferPortHz = 38.0f,
+            subwooferCrossoverHz = 58.0f,
+            subwooferRoomMode = SubwooferRoomMode.CAR_TRUNK
         )
-        assertArrayEquals(
-            intArrayOf(-38, 17, 32, 41, 46, 55, 57, 62, 65, 68, 69, 69, 60, 49, 34, 24, -12, -55, -102, -162),
-            IeqPreset.WARM.targetsQ4
+        val sealedCfg = portedCfg.copy(
+            subwooferEnclosure = SubwooferEnclosure.SEALED,
+            subwooferRoomMode = SubwooferRoomMode.STUDIO_DRY
         )
-        assertArrayEquals(
-            intArrayOf(-65, 0, 14, 29, 39, 52, 56, 61, 67, 70, 73, 74, 67, 61, 52, 49, 20, -14, -50, -108),
-            IeqPreset.BALANCED.targetsQ4
+        val bandpassCfg = portedCfg.copy(
+            subwooferEnclosure = SubwooferEnclosure.BANDPASS,
+            subwooferVocalPriority = true
         )
+        val portedCurve = EnhancerDsp.computeSubwooferCurve31(portedCfg)
+        val sealedCurve = EnhancerDsp.computeSubwooferCurve31(sealedCfg)
+        val bandpassCurve = EnhancerDsp.computeSubwooferCurve31(bandpassCfg)
+
+        assertTrue("Ported Car Trunk must deliver stronger 40 Hz resonance than Sealed Studio Dry", portedCurve[3] > sealedCurve[3] + 1.0)
+        assertTrue("Bandpass with Vocal Priority must scoop 100-200 Hz deeper than Sealed", bandpassCurve[9] < sealedCurve[9] - 1.0)
     }
 
     @Test

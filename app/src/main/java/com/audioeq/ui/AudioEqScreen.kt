@@ -201,8 +201,6 @@ fun AudioEqScreen(
                         onBassBoostChange = viewModel::setBassBoostDb,
                         onToggleVirtualBass = viewModel::setVirtualBassEnabled,
                         onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
-                        onSelectIeqPreset = viewModel::selectIeqPreset,
-                        onIeqAmountChange = viewModel::setIeqAmount,
                         onToggleDialogue = viewModel::setDialogueEnabled,
                         onDialogueAmountChange = viewModel::setDialogueAmount,
                         onToggleSurround = viewModel::setSurroundEnabled,
@@ -238,10 +236,21 @@ fun AudioEqScreen(
                     SubwooferCard(
                         config = uiState.enhancerConfig,
                         enabled = uiState.masterEnabled,
+                        liveSpectrum31 = uiState.liveSpectrum31,
+                        gainReduction6 = uiState.gainReduction6,
                         onToggleSubwoofer = viewModel::setSubwooferEnabled,
                         onSubwooferIntensityChange = viewModel::setSubwooferIntensity,
                         onSubwooferSubOctaveChange = viewModel::setSubwooferSubOctaveMix,
-                        onToggleSubwooferAutoLoudness = viewModel::setSubwooferAutoLoudness
+                        onToggleSubwooferAutoLoudness = viewModel::setSubwooferAutoLoudness,
+                        onSelectEnclosure = viewModel::setSubwooferEnclosure,
+                        onCrossoverHzChange = viewModel::setSubwooferCrossoverHz,
+                        onPortHzChange = viewModel::setSubwooferPortHz,
+                        onDampingChange = viewModel::setSubwooferDamping,
+                        onPhaseDegChange = viewModel::setSubwooferPhaseDeg,
+                        onWarmthChange = viewModel::setSubwooferWarmth,
+                        onSubsonicHzChange = viewModel::setSubwooferSubsonicHz,
+                        onToggleVocalPriority = viewModel::setSubwooferVocalPriority,
+                        onSelectRoomMode = viewModel::setSubwooferRoomMode
                     )
                 }
 

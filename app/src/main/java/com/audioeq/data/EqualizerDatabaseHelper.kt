@@ -7,7 +7,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
-import com.audioeq.audio.IeqPreset
+import com.audioeq.audio.SubwooferEnclosure
+import com.audioeq.audio.SubwooferRoomMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqPreset
 import com.audioeq.model.OutputRoute
@@ -20,7 +21,7 @@ class EqualizerDatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "audio_eq_studio.db"
-        const val DATABASE_VERSION = 9
+        const val DATABASE_VERSION = 10
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -94,8 +95,6 @@ class EqualizerDatabaseHelper(context: Context) :
             """
             CREATE TABLE IF NOT EXISTS enhancer_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                ieq_preset_id TEXT NOT NULL DEFAULT 'ieq_off',
-                ieq_amount INTEGER NOT NULL DEFAULT 10,
                 dialogue_enabled INTEGER NOT NULL DEFAULT 0,
                 dialogue_amount INTEGER NOT NULL DEFAULT 8,
                 bass_enabled INTEGER NOT NULL DEFAULT 0,
@@ -131,18 +130,17 @@ class EqualizerDatabaseHelper(context: Context) :
             onCreate(db)
             return
         }
-        if (oldVersion < 9) {
+        if (oldVersion < 10) {
             db.execSQL("DROP TABLE IF EXISTS movie_profile")
             db.execSQL("DROP TABLE IF EXISTS music_profile")
             db.execSQL("DROP TABLE IF EXISTS stereo_widening")
             db.execSQL("DROP TABLE IF EXISTS reduce_reverb")
+            db.execSQL("DROP TABLE IF EXISTS ieq_profiles")
             db.execSQL("DROP TABLE IF EXISTS enhancer_settings")
             db.execSQL(
                 """
                 CREATE TABLE IF NOT EXISTS enhancer_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
-                    ieq_preset_id TEXT NOT NULL DEFAULT 'ieq_off',
-                    ieq_amount INTEGER NOT NULL DEFAULT 10,
                     dialogue_enabled INTEGER NOT NULL DEFAULT 0,
                     dialogue_amount INTEGER NOT NULL DEFAULT 8,
                     bass_enabled INTEGER NOT NULL DEFAULT 0,
@@ -176,48 +174,7 @@ class EqualizerDatabaseHelper(context: Context) :
     }
 
     private fun createAndSeedSpecificationTables(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS ieq_profiles (
-                band_index INTEGER PRIMARY KEY,
-                center_freq_hz INTEGER NOT NULL,
-                deep_bass_freq_hz INTEGER NOT NULL DEFAULT 0,
-                balanced_q4 INTEGER NOT NULL,
-                balanced_db REAL NOT NULL,
-                warm_q4 INTEGER NOT NULL,
-                warm_db REAL NOT NULL,
-                detailed_q4 INTEGER NOT NULL,
-                detailed_db REAL NOT NULL,
-                off_q4 INTEGER NOT NULL,
-                off_db REAL NOT NULL
-            )
-            """.trimIndent()
-        )
-        try {
-            db.execSQL("ALTER TABLE ieq_profiles ADD COLUMN deep_bass_freq_hz INTEGER NOT NULL DEFAULT 0")
-        } catch (_: Exception) {
-        }
-        db.execSQL("DELETE FROM ieq_profiles")
-        for (i in 0 until 20) {
-            val balQ4 = IeqPreset.BALANCED.targetsQ4[i]
-            val warmQ4 = IeqPreset.WARM.targetsQ4[i]
-            val detQ4 = IeqPreset.DETAILED.targetsQ4[i]
-            val cv = ContentValues().apply {
-                put("band_index", i)
-                put("center_freq_hz", EnhancerDsp.IEQ_FREQS_20[i])
-                put("deep_bass_freq_hz", EnhancerDsp.IEQ_FREQS_20_DEEP_BASS[i])
-                put("balanced_q4", balQ4)
-                put("balanced_db", balQ4 / 16.0)
-                put("warm_q4", warmQ4)
-                put("warm_db", warmQ4 / 16.0)
-                put("detailed_q4", detQ4)
-                put("detailed_db", detQ4 / 16.0)
-                put("off_q4", 0)
-                put("off_db", 0.0)
-            }
-            db.insertWithOnConflict("ieq_profiles", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        }
-
+        db.execSQL("DROP TABLE IF EXISTS ieq_profiles")
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS dsp_mathematical_models (
@@ -243,7 +200,7 @@ class EqualizerDatabaseHelper(context: Context) :
                 "Dynamic Profile (Media Intelligence Real-Time Classifier & Steering)",
                 "Time / Frequency Domain",
                 "S_dyn=1.0*P_movie*I_virt+0.35*P_music*I_eq; Target=P_music*T_bal+P_speech*T_dlg",
-                """{"ieq_preset":"ieq_balanced","ieq_amount_spk":6,"ieq_amount_bt":6,"dialog_amount":4,"peak_spk_q8":240,"peak_hp_q8":256,"volmax_spk":17,"volmax_hp":32}"""
+                """{"dialog_amount":4,"peak_spk_q8":240,"peak_hp_q8":256,"volmax_spk":17,"volmax_hp":32}"""
             ),
             arrayOf(
                 "deep_bass_dc_shelf",
@@ -253,11 +210,11 @@ class EqualizerDatabaseHelper(context: Context) :
                 """{"stage_a_fc_hz":38.0,"stage_a_q":0.90,"stage_b_fc_hz":47.0,"stage_b_q":1.15,"anti_mud_fc_hz":210.0,"stage_c_lpf_hz":120.0,"volmax_spk":24,"volmax_hp":36,"volmax_bt":32}"""
             ),
             arrayOf(
-                "balanced_ieq_20band",
-                "Balance (20-Band Balanced IEQ Profile)",
-                "Log-Frequency Biquad Cascade",
-                "E(k,t)=T_bal(k)-S_bar_in(k,t); DeltaG(k,t)=clamp(mu*E(k,t), -6.0, +6.0)",
-                """{"bands":20,"q4_scale":16.0,"mu_bt":0.375,"mu_spk":0.250,"clamp_db":6.0}"""
+                "subwoofer_allpass_rotator",
+                "Subwoofer Phase Alignment (1st-Order All-Pass Phase Rotator)",
+                "Z-Domain All-Pass Filter",
+                "H(z)=(a+z^-1)/(1+a*z^-1), a=(tan(pi*f_phase/fs)-1)/(tan(pi*f_phase/fs)+1)",
+                """{"phase_range_deg":180,"port_range_hz":[28,55],"crossover_range_hz":[55,120],"subsonic_range_hz":[15,35]}"""
             )
         )
         for (row in modelRows) {
@@ -275,8 +232,6 @@ class EqualizerDatabaseHelper(context: Context) :
     private fun seedDefaultEnhancerSettings(db: SQLiteDatabase) {
         val cv = ContentValues().apply {
             put("id", 1)
-            put("ieq_preset_id", IeqPreset.OFF.id)
-            put("ieq_amount", 10)
             put("dialogue_enabled", 0)
             put("dialogue_amount", 8)
             put("bass_enabled", 0)
@@ -367,10 +322,18 @@ class EqualizerDatabaseHelper(context: Context) :
         val subIntensity = getSetting("subwoofer_intensity", "0.85").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.85f
         val subOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.35").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.35f
         val subAutoLoudness = getSetting("subwoofer_auto_loudness", "1") == "1"
+        val subEnclosure = SubwooferEnclosure.fromId(getSetting("subwoofer_enclosure", SubwooferEnclosure.PORTED.id))
+        val subCrossoverHz = getSetting("subwoofer_crossover_hz", "58.0").toFloatOrNull()?.coerceIn(55f, 120f) ?: 58.0f
+        val subPortHz = getSetting("subwoofer_port_hz", "38.0").toFloatOrNull()?.coerceIn(28f, 55f) ?: 38.0f
+        val subDamping = getSetting("subwoofer_damping", "0.26").toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.26f
+        val subPhaseDeg = getSetting("subwoofer_phase_deg", "0.0").toFloatOrNull()?.coerceIn(0f, 180f) ?: 0.0f
+        val subWarmth = getSetting("subwoofer_warmth", "0.65").toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.65f
+        val subSubsonicHz = getSetting("subwoofer_subsonic_hz", "22.0").toFloatOrNull()?.coerceIn(15f, 35f) ?: 22.0f
+        val subVocalPriority = getSetting("subwoofer_vocal_priority", "0") == "1"
+        val subRoomMode = SubwooferRoomMode.fromId(getSetting("subwoofer_room_mode", SubwooferRoomMode.THEATER.id))
         db.rawQuery(
             """
-            SELECT ieq_preset_id, ieq_amount,
-                   dialogue_enabled, dialogue_amount,
+            SELECT dialogue_enabled, dialogue_amount,
                    bass_enabled, bass_boost_db,
                    virtual_bass_enabled, virtual_bass_strength,
                    deep_bass_enabled, surround_enabled, surround_width,
@@ -380,18 +343,16 @@ class EqualizerDatabaseHelper(context: Context) :
             null
         ).use { cursor ->
             if (cursor.moveToFirst()) {
-                val preset = IeqPreset.fromId(cursor.getString(0))
-                val ieqAmt = cursor.getInt(1).coerceIn(0, 16)
-                val dlgOn = cursor.getInt(2) == 1
-                val dlgAmt = cursor.getInt(3).coerceIn(0, 16)
-                val bassOn = cursor.getInt(4) == 1
-                val bassDb = cursor.getFloat(5).coerceIn(0f, 6f)
-                val vBassOn = cursor.getInt(6) == 1
-                val vBassStr = cursor.getFloat(7).coerceIn(0f, 1f)
-                val deepBassOn = cursor.getInt(8) == 1
-                val surrOn = cursor.getInt(9) == 1
-                val surrWidth = cursor.getFloat(10).coerceIn(0f, 1f)
-                val prof = AudioProfile.fromId(cursor.getString(11))
+                val dlgOn = cursor.getInt(0) == 1
+                val dlgAmt = cursor.getInt(1).coerceIn(0, 16)
+                val bassOn = cursor.getInt(2) == 1
+                val bassDb = cursor.getFloat(3).coerceIn(0f, 6f)
+                val vBassOn = cursor.getInt(4) == 1
+                val vBassStr = cursor.getFloat(5).coerceIn(0f, 1f)
+                val deepBassOn = cursor.getInt(6) == 1
+                val surrOn = cursor.getInt(7) == 1
+                val surrWidth = cursor.getFloat(8).coerceIn(0f, 1f)
+                val prof = AudioProfile.fromId(cursor.getString(9))
                 return EnhancerConfig(
                     profile = prof,
                     bassEnabled = bassOn,
@@ -399,8 +360,6 @@ class EqualizerDatabaseHelper(context: Context) :
                     virtualBassEnabled = vBassOn,
                     virtualBassStrength = vBassStr,
                     deepBassEnabled = deepBassOn,
-                    ieqPreset = preset,
-                    ieqAmount = ieqAmt,
                     dialogueEnhancerEnabled = dlgOn,
                     dialogueAmount = dlgAmt,
                     surroundEnabled = surrOn,
@@ -408,7 +367,16 @@ class EqualizerDatabaseHelper(context: Context) :
                     subwooferEnabled = subEnabled,
                     subwooferIntensity = subIntensity,
                     subwooferSubOctaveMix = subOctaveMix,
-                    subwooferAutoLoudness = subAutoLoudness
+                    subwooferAutoLoudness = subAutoLoudness,
+                    subwooferEnclosure = subEnclosure,
+                    subwooferCrossoverHz = subCrossoverHz,
+                    subwooferPortHz = subPortHz,
+                    subwooferDamping = subDamping,
+                    subwooferPhaseDeg = subPhaseDeg,
+                    subwooferWarmth = subWarmth,
+                    subwooferSubsonicHz = subSubsonicHz,
+                    subwooferVocalPriority = subVocalPriority,
+                    subwooferRoomMode = subRoomMode
                 )
             }
         }
@@ -416,7 +384,16 @@ class EqualizerDatabaseHelper(context: Context) :
             subwooferEnabled = subEnabled,
             subwooferIntensity = subIntensity,
             subwooferSubOctaveMix = subOctaveMix,
-            subwooferAutoLoudness = subAutoLoudness
+            subwooferAutoLoudness = subAutoLoudness,
+            subwooferEnclosure = subEnclosure,
+            subwooferCrossoverHz = subCrossoverHz,
+            subwooferPortHz = subPortHz,
+            subwooferDamping = subDamping,
+            subwooferPhaseDeg = subPhaseDeg,
+            subwooferWarmth = subWarmth,
+            subwooferSubsonicHz = subSubsonicHz,
+            subwooferVocalPriority = subVocalPriority,
+            subwooferRoomMode = subRoomMode
         )
     }
 
@@ -424,8 +401,6 @@ class EqualizerDatabaseHelper(context: Context) :
         val db = writableDatabase
         val cv = ContentValues().apply {
             put("id", 1)
-            put("ieq_preset_id", config.ieqPreset.id)
-            put("ieq_amount", config.ieqAmount.coerceIn(0, 16))
             put("dialogue_enabled", if (config.dialogueEnhancerEnabled) 1 else 0)
             put("dialogue_amount", config.dialogueAmount.coerceIn(0, 16))
             put("bass_enabled", if (config.bassEnabled) 1 else 0)
@@ -442,6 +417,15 @@ class EqualizerDatabaseHelper(context: Context) :
         setSetting("subwoofer_intensity", config.subwooferIntensity.coerceIn(0f, 1.5f).toString())
         setSetting("subwoofer_sub_octave_mix", config.subwooferSubOctaveMix.coerceIn(0f, 0.6f).toString())
         setSetting("subwoofer_auto_loudness", if (config.subwooferAutoLoudness) "1" else "0")
+        setSetting("subwoofer_enclosure", config.subwooferEnclosure.id)
+        setSetting("subwoofer_crossover_hz", config.subwooferCrossoverHz.coerceIn(55f, 120f).toString())
+        setSetting("subwoofer_port_hz", config.subwooferPortHz.coerceIn(28f, 55f).toString())
+        setSetting("subwoofer_damping", config.subwooferDamping.coerceIn(0f, 1f).toString())
+        setSetting("subwoofer_phase_deg", config.subwooferPhaseDeg.coerceIn(0f, 180f).toString())
+        setSetting("subwoofer_warmth", config.subwooferWarmth.coerceIn(0f, 1f).toString())
+        setSetting("subwoofer_subsonic_hz", config.subwooferSubsonicHz.coerceIn(15f, 35f).toString())
+        setSetting("subwoofer_vocal_priority", if (config.subwooferVocalPriority) "1" else "0")
+        setSetting("subwoofer_room_mode", config.subwooferRoomMode.id)
     }
 
     fun loadAllPresets(): List<EqPreset> {

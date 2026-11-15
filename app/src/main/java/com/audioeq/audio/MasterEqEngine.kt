@@ -1320,6 +1320,13 @@ class MasterEqEngine(
                     val wInt = if (subActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
                     val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
                     val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
+                    val subsonicPostScale = (cfg.subwooferSubsonicHz.coerceIn(15f, 35f) / 22.0f).coerceIn(0.68f, 1.55f)
+                    val enclosurePostMult = when (cfg.subwooferEnclosure) {
+                        SubwooferEnclosure.SEALED -> 0.85f
+                        SubwooferEnclosure.PORTED -> 1.00f
+                        SubwooferEnclosure.BANDPASS -> 1.15f
+                    }
+                    val warmthPostAdd = if (subActive) (cfg.subwooferWarmth.coerceIn(0f, 1f) - 0.65f) * 1.4f * wInt else 0f
 
                     for (k in 0 until sessionBands) {
                         val deepOrBassPost = if (!deepActive && !bassActive) {
@@ -1344,18 +1351,19 @@ class MasterEqEngine(
                             0.0f
                         } else if (sessionBands >= 20) {
                             when (k) {
-                                0 -> -4.0f * wInt
-                                2 -> 3.5f * subEff
-                                3 -> 4.5f * subEff
-                                4 -> 3.5f * subEff
-                                10 -> -2.0f * wInt
+                                0 -> -4.0f * wInt * subsonicPostScale
+                                2 -> 3.5f * subEff * enclosurePostMult
+                                3 -> 4.5f * subEff * enclosurePostMult
+                                4 -> 3.5f * subEff * enclosurePostMult + warmthPostAdd * 0.5f
+                                5, 6 -> warmthPostAdd * 0.7f
+                                10 -> -2.0f * wInt * enclosurePostMult
                                 else -> 0.0f
                             }
                         } else {
                             when (k) {
-                                0 -> 4.2f * subEff
-                                1 -> 3.2f * subEff
-                                3 -> -2.0f * wInt
+                                0 -> 4.2f * subEff * enclosurePostMult
+                                1 -> 3.2f * subEff * enclosurePostMult + warmthPostAdd * 0.6f
+                                3 -> -2.0f * wInt * enclosurePostMult
                                 else -> 0.0f
                             }
                         }
@@ -1382,11 +1390,27 @@ class MasterEqEngine(
                     val wInt = if (subMbcActive) cfg.subwooferIntensity.coerceIn(0f, 1.5f) else 0f
                     val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
                     val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
+                    val subCrossoverHz = cfg.subwooferCrossoverHz.coerceIn(55f, 120f)
+                    val subDamping = cfg.subwooferDamping.coerceIn(0f, 1f)
+                    val baseReleaseMs = (320f - 230f * subDamping).coerceIn(90f, 320f)
+                    val subReleaseMs = when (cfg.subwooferEnclosure) {
+                        SubwooferEnclosure.SEALED -> (baseReleaseMs * 0.45f).coerceIn(85f, 140f)
+                        SubwooferEnclosure.PORTED -> baseReleaseMs
+                        SubwooferEnclosure.BANDPASS -> (baseReleaseMs * 1.15f).coerceIn(140f, 360f)
+                    } + (if (cfg.subwooferRoomMode == SubwooferRoomMode.CAR_TRUNK) 35f else 0f)
+                    val subAttackMs = (58f - 13f * subDamping).coerceIn(45f, 58f)
                     val privilegedMbcActive = sessionEnabled && currentMode != EngineMode.LEGACY
                     val mbcKey = (if (dialogueActive) (cfg.dialogueAmount + 100) else 0) +
                         (if (deepBassMbcActive) 1000 else 0) +
                         (if (bassMbcActive) ((cfg.bassBoostDb * 10f).roundToInt() * 2000) else 0) +
-                        (if (subMbcActive) ((subEff * 20f).roundToInt() * 50000) else 0) +
+                        (if (subMbcActive) (
+                            (subEff * 20f).roundToInt() * 50000 +
+                                subCrossoverHz.roundToInt() * 31 +
+                                (subDamping * 20f).roundToInt() * 97 +
+                                cfg.subwooferEnclosure.ordinal * 311 +
+                                cfg.subwooferRoomMode.ordinal * 577 +
+                                (if (cfg.subwooferVocalPriority) 701 else 0)
+                            ) else 0) +
                         (if (privilegedMbcActive) 10000 else 0)
                     if (lastAppliedMbcKey[sid] != mbcKey) {
                         for (b in 0 until 6) {
@@ -1394,9 +1418,9 @@ class MasterEqEngine(
                                 b == 0 && subMbcActive -> {
                                     DynamicsProcessing.MbcBand(
                                         true,
-                                        58.0f,
-                                        55.0f,
-                                        260.0f,
+                                        subCrossoverHz,
+                                        subAttackMs,
+                                        subReleaseMs,
                                         2.2f,
                                         -22.0f,
                                         8.0f,
@@ -1409,7 +1433,7 @@ class MasterEqEngine(
                                 b == 1 && subMbcActive -> {
                                     DynamicsProcessing.MbcBand(
                                         true,
-                                        135.0f,
+                                        maxOf(135.0f, subCrossoverHz + 25.0f),
                                         25.0f,
                                         110.0f,
                                         2.5f,
@@ -1422,18 +1446,23 @@ class MasterEqEngine(
                                     )
                                 }
                                 b == 2 && subMbcActive -> {
+                                    val mudClampGain = if (cfg.subwooferVocalPriority) {
+                                        (-3.2f * wInt).coerceIn(-4.8f, 0f)
+                                    } else {
+                                        (-2.5f * wInt).coerceIn(-4.0f, 0f)
+                                    }
                                     DynamicsProcessing.MbcBand(
                                         true,
                                         320.0f,
-                                        8.0f,
+                                        if (cfg.subwooferVocalPriority) 5.0f else 8.0f,
                                         90.0f,
-                                        3.0f,
+                                        if (cfg.subwooferVocalPriority) 3.5f else 3.0f,
                                         -16.0f,
                                         4.0f,
                                         -60.0f,
                                         1.0f,
                                         0.0f,
-                                        (-2.5f * wInt).coerceIn(-4.0f, 0f)
+                                        mudClampGain
                                     )
                                 }
                                 b == 0 && (deepBassMbcActive || bassMbcActive) -> {
@@ -1654,17 +1683,14 @@ class MasterEqEngine(
             } else {
                 EnhancerDsp.IEQ_FREQS_20
             }
-            val mu = (cfg.ieqAmount.coerceIn(0, 16) / 16.0)
-            val ieqTargetsQ4 = cfg.ieqPreset.targetsQ4
             val combined20Db = DoubleArray(20) { k ->
-                val ieqDb = if (cfg.ieqPreset != IeqPreset.OFF) (ieqTargetsQ4[k] / 16.0) * mu else 0.0
                 val fHz = freqs20[k].coerceAtLeast(20).toDouble()
                 val autoEqDb = if (autoProf != null) {
                     AutoEqMapper.responseDb(autoProf, fHz) * params.headphoneStrength.coerceIn(0.0, 1.0)
                 } else {
                     0.0
                 }
-                (geq20Db[k] + ieqDb + autoEqDb).coerceIn(-12.0, 12.0)
+                (geq20Db[k] + autoEqDb).coerceIn(-12.0, 12.0)
             }
             val gains20Q4 = if (effectiveEnabled) {
                 EnhancerDsp.toQ4RegisterValues(combined20Db)
@@ -1673,7 +1699,6 @@ class MasterEqEngine(
             }
             val payload = EnhancerDsp.buildHardwareRegisterPayload(
                 gains20Q4 = gains20Q4,
-                ieqPresetIndex = cfg.ieqPreset.ordinal,
                 deepBassEnabled = endpointSpec.deepBassActive,
                 peakQ8 = endpointSpec.peakQ8,
                 volmaxQ4 = endpointSpec.volmaxQ4
