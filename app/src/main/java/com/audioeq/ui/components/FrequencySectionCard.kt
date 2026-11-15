@@ -514,11 +514,14 @@ fun ToneCard(
     intensity: Float,
     volumeContourEnabled: Boolean,
     isAbCompare: Boolean,
+    useKnobs: Boolean = false,
+    deepBassEnabled: Boolean = false,
     onTiltBassChange: (Float) -> Unit,
     onTiltTrebleChange: (Float) -> Unit,
     onIntensityChange: (Float) -> Unit,
     onToggleVolumeContour: (Boolean) -> Unit,
     onToggleAbCompare: (Boolean) -> Unit,
+    onToggleDeepBass: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMonetPalette.current
@@ -665,6 +668,19 @@ fun ToneCard(
                     enabled = masterEnabled,
                     onSelect = onIntensityChange,
                     modifier = Modifier.testTag("intensity_segmented_row")
+                )
+            }
+
+            if (useKnobs) {
+                HorizontalDivider(color = palette.outlineV)
+
+                V7SwitchRow(
+                    title = "Deep bass",
+                    subtitle = "Resonant sub-bass shelf & dynamic kick envelope",
+                    checked = deepBassEnabled,
+                    enabled = masterEnabled,
+                    onCheckedChange = onToggleDeepBass,
+                    testTag = "enhancer_deep_bass_switch"
                 )
             }
 

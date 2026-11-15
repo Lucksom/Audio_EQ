@@ -59,10 +59,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -285,24 +287,24 @@ fun AudioRotaryKnob(
     val span = (valueRange.endInclusive - valueRange.start).coerceAtLeast(0.0001f)
     val norm = ((value.coerceIn(valueRange.start, valueRange.endInclusive) - valueRange.start) / span)
         .coerceIn(0f, 1f)
-    val isActive = norm > 0.005f
+    val angleDeg = -135f + norm * 270f
 
     val knobScale by animateFloatAsState(
-        targetValue = if (isDragging) 1.04f else 1.0f,
-        animationSpec = tween(120),
+        targetValue = if (isDragging) 1.05f else 1.0f,
+        animationSpec = tween(140),
         label = "knobScale_$testTag"
     )
 
     Column(
         modifier = modifier
-            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .padding(horizontal = 2.dp, vertical = 4.dp)
             .alpha(if (enabled) 1f else 0.45f),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(116.dp)
+                .size(130.dp)
                 .scale(knobScale)
                 .pointerInput(valueRange.start, valueRange.endInclusive, step) {
                     awaitEachGesture {
@@ -319,8 +321,9 @@ fun AudioRotaryKnob(
 
                         val cx = size.width / 2f
                         val cy = size.height / 2f
-                        val startY = down.position.y
-                        val startVal = currentValue
+                        var acc = currentValue
+                        var lastAng = (atan2(down.position.y - cy, down.position.x - cx) * (180.0 / PI)).toFloat()
+                        var lastY = down.position.y
 
                         fun snapValue(raw: Float): Float {
                             val clamped = raw.coerceIn(valueRange.start, valueRange.endInclusive)
@@ -332,28 +335,20 @@ fun AudioRotaryKnob(
                             }
                         }
 
-                        fun updateFromPoint(px: Float, py: Float) {
-                            val dx = px - cx
-                            val dy = py - cy
-                            val dist = hypot(dx, dy)
-                            if (dist > size.width * 0.14f) {
-                                val deg = (atan2(dx, -dy) * (180.0 / PI)).toFloat()
-                                if (deg >= -155f && deg <= 155f) {
-                                    val clampedDeg = deg.coerceIn(-135f, 135f)
-                                    val n = ((clampedDeg + 135f) / 270f).coerceIn(0f, 1f)
-                                    currentOnValueChange(snapValue(valueRange.start + n * span))
-                                    return
-                                }
+                        val downDx = down.position.x - cx
+                        val downDy = down.position.y - cy
+                        val downDist = hypot(downDx, downDy)
+                        if (downDist >= size.width * 0.28f) {
+                            val tapDeg = (atan2(downDx, -downDy) * (180.0 / PI)).toFloat()
+                            if (tapDeg >= -150f && tapDeg <= 150f) {
+                                val clampedDeg = tapDeg.coerceIn(-135f, 135f)
+                                val n = ((clampedDeg + 135f) / 270f).coerceIn(0f, 1f)
+                                acc = valueRange.start + n * span
+                                currentOnValueChange(snapValue(acc))
                             }
-                            val dyDrag = startY - py
-                            val deltaNorm = dyDrag / (size.height * 1.15f)
-                            val baseNorm = ((startVal - valueRange.start) / span).coerceIn(0f, 1f)
-                            val nextNorm = (baseNorm + deltaNorm).coerceIn(0f, 1f)
-                            currentOnValueChange(snapValue(valueRange.start + nextNorm * span))
                         }
 
                         isDragging = true
-                        updateFromPoint(down.position.x, down.position.y)
 
                         try {
                             do {
@@ -362,7 +357,29 @@ fun AudioRotaryKnob(
                                     ?: event.changes.firstOrNull()
                                 if (change != null && change.pressed) {
                                     change.consume()
-                                    updateFromPoint(change.position.x, change.position.y)
+                                    val px = change.position.x
+                                    val py = change.position.y
+                                    val dx = px - cx
+                                    val dy = py - cy
+                                    val dist = hypot(dx, dy)
+                                    if (dist >= size.width * 0.14f) {
+                                        val a = (atan2(dy, dx) * (180.0 / PI)).toFloat()
+                                        var d = a - lastAng
+                                        if (d > 180f) d -= 360f
+                                        if (d < -180f) d += 360f
+                                        lastAng = a
+                                        lastY = py
+                                        acc = (acc + d * (span / 270f))
+                                            .coerceIn(valueRange.start, valueRange.endInclusive)
+                                        currentOnValueChange(snapValue(acc))
+                                    } else {
+                                        val dyStep = lastY - py
+                                        lastY = py
+                                        lastAng = (atan2(dy, dx) * (180.0 / PI)).toFloat()
+                                        acc = (acc + (dyStep / (size.height * 0.9f)) * span)
+                                            .coerceIn(valueRange.start, valueRange.endInclusive)
+                                        currentOnValueChange(snapValue(acc))
+                                    }
                                 }
                             } while (event.changes.any { it.pressed })
                         } finally {
@@ -373,23 +390,37 @@ fun AudioRotaryKnob(
                 .testTag(testTag),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.size(116.dp)) {
+            Canvas(modifier = Modifier.size(130.dp)) {
+                val u = min(size.width, size.height) / 100f
                 val cx = size.width / 2f
                 val cy = size.height / 2f
-                val r = min(cx, cy)
 
-                val bezelRadius = r * 0.92f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color(0x3350230A),
+                            0.78f to Color(0x2250230A),
+                            1.0f to Color.Transparent
+                        ),
+                        center = Offset(cx, cy + 5.5f * u),
+                        radius = 52f * u
+                    ),
+                    radius = 52f * u,
+                    center = Offset(cx, cy + 5.5f * u)
+                )
+
+                val bezelRadius = 48f * u
                 val bezelBrush = if (palette.isDark) {
                     Brush.radialGradient(
                         colors = listOf(palette.sHigh, palette.sCont, palette.sLow),
-                        center = Offset(cx * 0.7f, cy * 0.6f),
-                        radius = bezelRadius * 1.25f
+                        center = Offset(35.6f * u, 26f * u),
+                        radius = 81.6f * u
                     )
                 } else {
                     Brush.radialGradient(
-                        colors = listOf(Color(0xFFFFFAF4), Color(0xFFF3E5D8), Color(0xFFE3CFC2)),
-                        center = Offset(cx * 0.7f, cy * 0.6f),
-                        radius = bezelRadius * 1.25f
+                        colors = listOf(Color(0xFFFFFAF4), Color(0xFFE3CFC2)),
+                        center = Offset(35.6f * u, 26f * u),
+                        radius = 81.6f * u
                     )
                 }
                 drawCircle(
@@ -398,34 +429,33 @@ fun AudioRotaryKnob(
                     center = Offset(cx, cy)
                 )
                 drawCircle(
-                    color = if (palette.isDark) palette.outlineV else Color(0xFFDECAB9),
+                    color = if (palette.isDark) palette.outlineV else Color(0xFFD6BFB1),
                     radius = bezelRadius,
                     center = Offset(cx, cy),
-                    style = Stroke(width = 1.dp.toPx())
+                    style = Stroke(width = 0.8f * u)
                 )
 
                 val ticks = 21
                 for (i in 0 until ticks) {
-                    val t = i.toFloat() / (ticks - 1).toFloat()
-                    val deg = -135f + t * 270f
-                    val rad = (deg - 90f) * (PI / 180.0)
-                    val r1 = r * 0.78f
-                    val r2 = r * (if (i % 5 == 0) 0.87f else 0.84f)
+                    val ta = -135f + 270f * (i.toFloat() / (ticks - 1).toFloat())
+                    val rad = (ta - 90f) * (PI / 180.0)
+                    val r1 = 44f * u
+                    val r2 = 40.5f * u
                     val x1 = cx + (r1 * cos(rad)).toFloat()
                     val y1 = cy + (r1 * sin(rad)).toFloat()
                     val x2 = cx + (r2 * cos(rad)).toFloat()
                     val y2 = cy + (r2 * sin(rad)).toFloat()
-                    val isLit = isActive && t <= norm + 0.001f
+                    val isLit = ta <= angleDeg + 0.01f
                     drawLine(
-                        color = if (isLit) palette.secondary else Color(0xFFC4AA9C),
+                        color = if (isLit) Color(0xFFC2410C) else Color(0xFFC4AA9C),
                         start = Offset(x1, y1),
                         end = Offset(x2, y2),
-                        strokeWidth = (if (i % 5 == 0) 2.1.dp else 1.5.dp).toPx(),
+                        strokeWidth = 1.3f * u,
                         cap = StrokeCap.Round
                     )
                 }
 
-                val arcRadius = r * 0.72f
+                val arcRadius = 38f * u
                 val arcTopLeft = Offset(cx - arcRadius, cy - arcRadius)
                 val arcSize = Size(arcRadius * 2f, arcRadius * 2f)
                 drawArc(
@@ -435,26 +465,59 @@ fun AudioRotaryKnob(
                     useCenter = false,
                     topLeft = arcTopLeft,
                     size = arcSize,
-                    style = Stroke(width = 5.2.dp.toPx(), cap = StrokeCap.Round)
+                    style = Stroke(width = 7f * u, cap = StrokeCap.Round)
                 )
 
-                if (isActive) {
+                if (norm > 0.002f) {
+                    val arcBrush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFFFBE5C), Color(0xFFB8461A)),
+                        start = Offset(12f * u, 12f * u),
+                        end = Offset(88f * u, 88f * u)
+                    )
                     drawArc(
-                        color = palette.secondary,
+                        brush = arcBrush,
                         startAngle = 135f,
                         sweepAngle = 270f * norm,
                         useCenter = false,
                         topLeft = arcTopLeft,
                         size = arcSize,
-                        style = Stroke(width = 5.2.dp.toPx(), cap = StrokeCap.Round)
+                        alpha = 0.38f,
+                        style = Stroke(width = 11.5f * u, cap = StrokeCap.Round)
+                    )
+                    drawArc(
+                        brush = arcBrush,
+                        startAngle = 135f,
+                        sweepAngle = 270f * norm,
+                        useCenter = false,
+                        topLeft = arcTopLeft,
+                        size = arcSize,
+                        style = Stroke(width = 7f * u, cap = StrokeCap.Round)
                     )
                 }
 
-                val bodyRadius = r * 0.56f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color(0x59461E05),
+                            0.72f to Color(0x38461E05),
+                            1.0f to Color.Transparent
+                        ),
+                        center = Offset(cx, cy + 4.8f * u),
+                        radius = 33.5f * u
+                    ),
+                    radius = 33.5f * u,
+                    center = Offset(cx, cy + 4.8f * u)
+                )
+
+                val bodyRadius = 29f * u
                 val bodyBrush = Brush.radialGradient(
-                    colors = listOf(Color(0xFFCC6428), Color(0xFF8F3209), Color(0xFF4A1500)),
-                    center = Offset(cx - bodyRadius * 0.28f, cy - bodyRadius * 0.36f),
-                    radius = bodyRadius * 1.4f
+                    colorStops = arrayOf(
+                        0.0f to Color(0xFFCC6428),
+                        0.5f to Color(0xFF8F3209),
+                        1.0f to Color(0xFF4A1500)
+                    ),
+                    center = Offset(41.88f * u, 37.24f * u),
+                    radius = 46.4f * u
                 )
                 drawCircle(
                     brush = bodyBrush,
@@ -462,62 +525,76 @@ fun AudioRotaryKnob(
                     center = Offset(cx, cy)
                 )
                 drawCircle(
-                    color = Color(0xFF3E1102).copy(alpha = 0.55f),
+                    color = Color(0xFF3A1000),
                     radius = bodyRadius,
                     center = Offset(cx, cy),
-                    style = Stroke(width = 1.dp.toPx())
-                )
-                drawCircle(
-                    color = Color(0xFFFFE6BE).copy(alpha = 0.25f),
-                    radius = r * 0.46f,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = 0.8.dp.toPx())
+                    style = Stroke(width = 0.6f * u)
                 )
 
-                val pointerDeg = -135f + norm * 270f
-                val pointerRad = (pointerDeg - 90f) * (PI / 180.0)
-                val pStart = r * 0.16f
-                val pEnd = r * 0.44f
+                val capRadius = 20f * u
+                val capBrush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0.0f to Color.White.copy(alpha = 0.25f),
+                        1.0f to Color.Transparent
+                    ),
+                    center = Offset(46f * u, 42f * u),
+                    radius = 28f * u
+                )
+                drawCircle(
+                    brush = capBrush,
+                    radius = capRadius,
+                    center = Offset(cx, cy)
+                )
+
+                val pointerRad = (angleDeg - 90f) * (PI / 180.0)
+                val pStart = 19f * u
+                val pEnd = 33f * u
                 val px1 = cx + (pStart * cos(pointerRad)).toFloat()
                 val py1 = cy + (pStart * sin(pointerRad)).toFloat()
                 val px2 = cx + (pEnd * cos(pointerRad)).toFloat()
                 val py2 = cy + (pEnd * sin(pointerRad)).toFloat()
                 drawLine(
+                    color = Color(0xFFFFDCAA).copy(alpha = 0.45f),
+                    start = Offset(px1, py1),
+                    end = Offset(px2, py2),
+                    strokeWidth = 7f * u,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
                     color = Color(0xFFFFF4DC),
                     start = Offset(px1, py1),
                     end = Offset(px2, py2),
-                    strokeWidth = 3.5.dp.toPx(),
+                    strokeWidth = 4f * u,
                     cap = StrokeCap.Round
                 )
             }
+
+            Text(
+                text = valueText,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                color = Color(0xFFFFF4DC),
+                maxLines = 1,
+                style = TextStyle(
+                    shadow = Shadow(
+                        color = Color(0x80280F00),
+                        offset = Offset(0f, 2f),
+                        blurRadius = 4f
+                    )
+                )
+            )
         }
 
         Text(
             text = label,
             fontSize = 12.sp,
-            color = palette.onVar,
-            maxLines = 1,
+            lineHeight = 15.sp,
+            color = palette.onSurface,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
         )
-
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(palette.sCont)
-                .border(1.dp, palette.outlineV, RoundedCornerShape(999.dp))
-                .padding(horizontal = 10.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = valueText,
-                fontFamily = JetBrainsMonoFontFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                color = palette.primary,
-                maxLines = 1
-            )
-        }
     }
 }
 

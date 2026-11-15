@@ -235,19 +235,6 @@ fun EnhancerCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        val deepPct = if (config.deepBassEnabled) 100f else 0f
-                        AudioRotaryKnob(
-                            label = "Deep Bass",
-                            valueText = if (config.deepBassEnabled) "100%" else "0%",
-                            value = deepPct,
-                            valueRange = 0f..100f,
-                            step = 1f,
-                            enabled = enabled,
-                            onValueChange = { v -> onToggleDeepBass(v > 1f) },
-                            testTag = "enhancer_deep_bass_switch",
-                            modifier = Modifier.weight(1f)
-                        )
-
                         val bassVal = if (config.bassEnabled) config.bassBoostDb.coerceIn(0f, 6f) else 0f
                         AudioRotaryKnob(
                             label = "Bass Enhancer",
@@ -266,12 +253,7 @@ fun EnhancerCard(
                             testTag = "enhancer_bass_slider",
                             modifier = Modifier.weight(1f)
                         )
-                    }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
                         val vbPct = if (config.virtualBassEnabled) (config.virtualBassStrength * 100f).coerceIn(0f, 100f) else 0f
                         AudioRotaryKnob(
                             label = "Virtual Bass",
@@ -290,11 +272,16 @@ fun EnhancerCard(
                             testTag = "enhancer_virtual_bass_slider",
                             modifier = Modifier.weight(1f)
                         )
+                    }
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         val dlgVal = if (config.dialogueEnhancerEnabled) config.dialogueAmount.toFloat().coerceIn(0f, 16f) else 0f
                         AudioRotaryKnob(
                             label = "Dialogue Enhancer",
-                            valueText = "${dlgVal.roundToInt()}",
+                            valueText = "${dlgVal.roundToInt()}/16",
                             value = dlgVal,
                             valueRange = 0f..16f,
                             step = 1f,
@@ -310,12 +297,7 @@ fun EnhancerCard(
                             testTag = "enhancer_dialogue_slider",
                             modifier = Modifier.weight(1f)
                         )
-                    }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
                         val surPct = if (config.surroundEnabled) (config.surroundWidth * 100f).coerceIn(0f, 100f) else 0f
                         AudioRotaryKnob(
                             label = "3D Surround",
@@ -334,8 +316,6 @@ fun EnhancerCard(
                             testTag = "enhancer_surround_slider",
                             modifier = Modifier.weight(1f)
                         )
-
-                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             } else {
@@ -349,18 +329,7 @@ fun EnhancerCard(
                     enabled = enabled,
                     onCheckedChange = onToggleDeepBass,
                     testTag = "enhancer_deep_bass_switch"
-                ) {
-                    AudioTrackSlider(
-                        label = "Kick envelope",
-                        valueText = if (deepBassActive) "100%" else "0%",
-                        value = if (deepBassActive) 100f else 0f,
-                        valueRange = 0f..100f,
-                        step = 1f,
-                        enabled = enabled,
-                        onValueChange = { pct -> onToggleDeepBass(pct > 1f) },
-                        testTag = "enhancer_deep_bass_slider"
-                    )
-                }
+                )
 
                 EnhancerModuleContainer(
                     icon = Icons.Default.Speaker,
@@ -761,7 +730,7 @@ fun SubwooferCard(
                         val subOctPct = if (subActive) (config.subwooferSubOctaveMix * 100f).coerceIn(0f, 60f) else 0f
                         AudioRotaryKnob(
                             label = "Sub-octave synthesizer",
-                            valueText = "${subOctPct.roundToInt()}% mix",
+                            valueText = "${subOctPct.roundToInt()}%",
                             value = subOctPct,
                             valueRange = 0f..60f,
                             step = 1f,
@@ -802,6 +771,17 @@ fun SubwooferCard(
 
                         Spacer(modifier = Modifier.weight(1f))
                     }
+
+                    HorizontalDivider(color = palette.outlineV)
+
+                    V7SwitchRow(
+                        title = "Fletcher-Munson equal-loudness",
+                        subtitle = "Scales sub-port pressure at lower levels",
+                        checked = config.subwooferAutoLoudness,
+                        enabled = enabled && subActive,
+                        onCheckedChange = onToggleSubwooferAutoLoudness,
+                        testTag = "subwoofer_loudness_switch"
+                    )
                 }
             } else {
                 Column(
@@ -851,19 +831,19 @@ fun SubwooferCard(
                         },
                         testTag = "subwoofer_crossover_slider"
                     )
+
+                    HorizontalDivider(color = palette.outlineV)
+
+                    V7SwitchRow(
+                        title = "Fletcher-Munson equal-loudness",
+                        subtitle = "Scales sub-port pressure at lower levels",
+                        checked = config.subwooferAutoLoudness,
+                        enabled = enabled && subActive,
+                        onCheckedChange = onToggleSubwooferAutoLoudness,
+                        testTag = "subwoofer_loudness_switch"
+                    )
                 }
             }
-
-            HorizontalDivider(color = palette.outlineV)
-
-            V7SwitchRow(
-                title = "Fletcher-Munson equal-loudness",
-                subtitle = "Scales sub-port pressure at lower volume",
-                checked = config.subwooferAutoLoudness,
-                enabled = enabled && subActive,
-                onCheckedChange = onToggleSubwooferAutoLoudness,
-                testTag = "subwoofer_loudness_switch"
-            )
         }
     }
 }

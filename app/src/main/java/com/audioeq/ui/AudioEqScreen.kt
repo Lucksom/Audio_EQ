@@ -182,11 +182,14 @@ fun AudioEqScreen(
                         intensity = uiState.intensity,
                         volumeContourEnabled = uiState.iso226Enabled,
                         isAbCompare = uiState.isAbCompare,
+                        useKnobs = uiState.useKnobs,
+                        deepBassEnabled = uiState.enhancerConfig.deepBassEnabled,
                         onTiltBassChange = viewModel::setTiltBassDb,
                         onTiltTrebleChange = viewModel::setTiltTrebleDb,
                         onIntensityChange = viewModel::setIntensity,
                         onToggleVolumeContour = viewModel::setIso226Enabled,
-                        onToggleAbCompare = viewModel::setAbCompare
+                        onToggleAbCompare = viewModel::setAbCompare,
+                        onToggleDeepBass = viewModel::setDeepBassEnabled
                     )
                 }
 
