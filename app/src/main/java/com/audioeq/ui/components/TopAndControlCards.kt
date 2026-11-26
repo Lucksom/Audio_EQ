@@ -687,54 +687,61 @@ fun TopBarHeader(
                         spotColor = palette.glow
                     )
                     .clip(RoundedCornerShape(14.dp))
-                    .background(palette.primaryC),
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(Color(0xFFFFF7EC), Color(0xFFFFE1EC)),
+                            start = Offset.Zero,
+                            end = Offset(140f, 140f)
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
-                val iconColor = palette.primary
-                Canvas(modifier = Modifier.size(22.dp)) {
-                    val w = size.width
-                    val h = size.height
-                    val strokeW = 2.2.dp.toPx()
-
-                    val x1 = w * (6f / 24f)
-                    val x2 = w * (12f / 24f)
-                    val x3 = w * (18f / 24f)
-                    drawLine(
-                        color = iconColor,
-                        start = Offset(x1, h * (4f / 24f)),
-                        end = Offset(x1, h * (20f / 24f)),
-                        strokeWidth = strokeW,
-                        cap = StrokeCap.Round
+                Canvas(modifier = Modifier.size(34.dp)) {
+                    val scaleX = size.width / 512f
+                    val scaleY = size.height / 512f
+                    val barSpecs = listOf(
+                        Triple(78f, 218f, 76f),
+                        Triple(152f, 172f, 168f),
+                        Triple(226f, 120f, 272f),
+                        Triple(300f, 172f, 168f),
+                        Triple(374f, 218f, 76f)
                     )
-                    drawLine(
-                        color = iconColor,
-                        start = Offset(x2, h * (4f / 24f)),
-                        end = Offset(x2, h * (20f / 24f)),
-                        strokeWidth = strokeW,
-                        cap = StrokeCap.Round
-                    )
-                    drawLine(
-                        color = iconColor,
-                        start = Offset(x3, h * (4f / 24f)),
-                        end = Offset(x3, h * (20f / 24f)),
-                        strokeWidth = strokeW,
-                        cap = StrokeCap.Round
-                    )
-                    drawCircle(
-                        color = iconColor,
-                        radius = 2.5.dp.toPx(),
-                        center = Offset(x1, h * (9f / 24f))
-                    )
-                    drawCircle(
-                        color = iconColor,
-                        radius = 2.5.dp.toPx(),
-                        center = Offset(x2, h * (15f / 24f))
-                    )
-                    drawCircle(
-                        color = iconColor,
-                        radius = 2.5.dp.toPx(),
-                        center = Offset(x3, h * (11f / 24f))
-                    )
+                    barSpecs.forEach { (bx, by, bh) ->
+                        val topLeft = Offset(bx * scaleX, by * scaleY)
+                        val barSize = Size(58f * scaleX, bh * scaleY)
+                        val corner = androidx.compose.ui.geometry.CornerRadius(29f * scaleX, 29f * scaleY)
+                        drawRoundRect(
+                            color = Color(0x33E61E6E),
+                            topLeft = Offset(topLeft.x, topLeft.y + 8f * scaleY),
+                            size = barSize,
+                            cornerRadius = corner
+                        )
+                        drawRoundRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Color(0xFFE61E6E), Color(0xFFFF7A3D)),
+                                startY = topLeft.y,
+                                endY = topLeft.y + barSize.height
+                            ),
+                            topLeft = topLeft,
+                            size = barSize,
+                            cornerRadius = corner
+                        )
+                    }
+                    val circleCentersX = listOf(107f, 181f, 255f, 329f, 403f)
+                    circleCentersX.forEach { cx ->
+                        val center = Offset(cx * scaleX, 256f * scaleY)
+                        drawCircle(
+                            color = Color.White,
+                            radius = 22f * scaleX,
+                            center = center
+                        )
+                        drawCircle(
+                            color = Color(0xFFE61E6E),
+                            radius = 22f * scaleX,
+                            center = center,
+                            style = Stroke(width = 12f * scaleX)
+                        )
+                    }
                 }
             }
 

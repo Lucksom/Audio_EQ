@@ -64,6 +64,7 @@ data class EngineRenderParams(
     val vocalPresenceBoost: Float = 0.0f,
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
+    val stftFrameDurationMs: Float = 40.0f,
     val usbBitPerfectEnabled: Boolean = false,
     val abxBypassCurve: Boolean = false,
     val musicOnlyTracking: Boolean = true,
@@ -598,6 +599,7 @@ class MasterEqEngine(
         val prev = latestParams.getAndSet(params)
         if (prev.compatibility10Band != params.compatibility10Band ||
             prev.transientMode != params.transientMode ||
+            abs(prev.stftFrameDurationMs - params.stftFrameDurationMs) > 0.1f ||
             prev.legacyGlobalMixMode != params.legacyGlobalMixMode
         ) {
             dspHandler.post {
@@ -690,9 +692,12 @@ class MasterEqEngine(
                         if (usePostEq) bands else 0,
                         true
                     )
-                    if (params.transientMode) {
-                        runCatching { cfgBuilder.setPreferredFrameDuration(5.0f) }
+                    val frameDurationMs = if (params.transientMode) {
+                        5.0f
+                    } else {
+                        params.stftFrameDurationMs.coerceIn(5.0f, 80.0f)
                     }
+                    runCatching { cfgBuilder.setPreferredFrameDuration(frameDurationMs) }
                     cfgBuilder.build()
                 }.getOrNull() ?: continue
 
@@ -1310,6 +1315,14 @@ class MasterEqEngine(
                     }
                 }
 
+                val hasEqOrTiltOrEnh = sessionEnabled && (
+                    cfg.isAnyActive() ||
+                        abs(params.tiltBassDb) > 0.05 ||
+                        abs(params.tiltTrebleDb) > 0.05 ||
+                        params.bandGains10L.any { abs(it) > 0.05 } ||
+                        params.bandGains10R.any { abs(it) > 0.05 }
+                    )
+
                 if (usePostEq) {
                     val prevPost = lastAppliedPostEq[sid]?.takeIf { it.size == sessionBands }
                         ?: FloatArray(sessionBands) { Float.NaN }.also { lastAppliedPostEq[sid] = it }
@@ -1321,21 +1334,26 @@ class MasterEqEngine(
                     val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
                     val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
                     val subCrossoverScale = ((cfg.subwooferCrossoverHz.coerceIn(55f, 120f) - 55f) / 65f).coerceIn(0f, 1f)
+                    val sepPostScale = when {
+                        subActive || deepActive || bassActive -> 0.85f
+                        hasEqOrTiltOrEnh -> 0.55f
+                        else -> 0.0f
+                    }
 
                     for (k in 0 until sessionBands) {
                         val deepOrBassPost = if (!deepActive && !bassActive) {
                             0.0f
                         } else if (sessionBands >= 20) {
                             when (k) {
-                                0 -> (if (deepActive) 2.2f else 0f) + 2.4f * bassPostScale
-                                1, 2 -> (if (deepActive) 2.6f else 0f) + 3.2f * bassPostScale
-                                3, 4 -> (if (deepActive) 1.8f else 0f) + 2.8f * bassPostScale
-                                5 -> (if (deepActive) 0.9f else 0f) + 1.8f * bassPostScale
+                                0 -> (if (deepActive) 1.8f else 0f) - 2.4f * bassPostScale
+                                1, 2 -> (if (deepActive) 2.4f else 0f) + 1.8f * bassPostScale
+                                3, 4 -> (if (deepActive) 2.2f else 0f) + 3.2f * bassPostScale
+                                5, 6 -> (if (deepActive) 1.2f else 0f) + 2.6f * bassPostScale
                                 else -> 0.0f
                             }
                         } else {
                             when (k) {
-                                0 -> (if (deepActive) 2.6f else 0f) + 3.2f * bassPostScale
+                                0 -> (if (deepActive) 2.6f else 0f) + 3.0f * bassPostScale
                                 1 -> (if (deepActive) 1.8f else 0f) + 2.6f * bassPostScale
                                 2 -> 1.2f * bassPostScale
                                 else -> 0.0f
@@ -1363,12 +1381,35 @@ class MasterEqEngine(
                                 else -> 0.0f
                             }
                         }
+                        val separationPolishPost = if (sepPostScale <= 0.01f) {
+                            0.0f
+                        } else if (sessionBands >= 28) {
+                            when (k) {
+                                9, 10 -> -0.7f * sepPostScale
+                                20, 21 -> 0.75f * sepPostScale
+                                26 -> 0.6f * sepPostScale
+                                27, 28 -> 1.3f * sepPostScale
+                                29, 30 -> 2.0f * sepPostScale
+                                else -> 0.0f
+                            }
+                        } else if (sessionBands >= 10) {
+                            when (k) {
+                                3 -> -0.6f * sepPostScale
+                                6 -> 0.65f * sepPostScale
+                                8 -> 1.1f * sepPostScale
+                                9 -> 1.7f * sepPostScale
+                                else -> 0.0f
+                            }
+                        } else {
+                            0.0f
+                        }
                         val overflowBoost = if (sessionEnabled && effL[k] > 10.5f) {
                             (effL[k] - 10.5f).coerceIn(0.0f, 5.5f)
                         } else {
                             0.0f
                         }
-                        val postGain = (deepOrBassPost + subwooferPost + overflowBoost).coerceIn(-10.0f, 12.0f)
+                        val postGain = (deepOrBassPost + subwooferPost + separationPolishPost + overflowBoost)
+                            .coerceIn(-10.0f, 12.0f)
                         if (prevPost[k].isNaN() || abs(prevPost[k] - postGain) >= 0.05f) {
                             val postBand = DynamicsProcessing.EqBand(true, bandCutoffs[k], postGain)
                             dp.setPostEqBandAllChannelsTo(k, postBand)
@@ -1387,8 +1428,21 @@ class MasterEqEngine(
                     val subLoudness = if (cfg.subwooferAutoLoudness) 1.0f + 0.35f * (1.0f - currentVolumeRatio) else 1.0f
                     val subEff = (wInt * subLoudness).coerceIn(0f, 1.65f)
                     val subCrossoverHz = cfg.subwooferCrossoverHz.coerceIn(55f, 120f)
-                    val subCrossoverScale = ((subCrossoverHz - 55f) / 65f).coerceIn(0f, 1f)
                     val privilegedMbcActive = sessionEnabled && currentMode != EngineMode.LEGACY
+                    val separationMbcActive = sessionEnabled && (
+                        subMbcActive ||
+                            deepBassMbcActive ||
+                            bassMbcActive ||
+                            dialogueActive ||
+                            privilegedMbcActive ||
+                            hasEqOrTiltOrEnh
+                        )
+                    val sepDrive = when {
+                        subMbcActive || deepBassMbcActive || bassMbcActive -> 1.0f
+                        dialogueActive || privilegedMbcActive -> 0.85f
+                        hasEqOrTiltOrEnh -> 0.70f
+                        else -> 0.0f
+                    }
                     val mbcKey = (if (dialogueActive) (cfg.dialogueAmount + 100) else 0) +
                         (if (deepBassMbcActive) 1000 else 0) +
                         (if (bassMbcActive) ((cfg.bassBoostDb * 10f).roundToInt() * 2000) else 0) +
@@ -1396,134 +1450,146 @@ class MasterEqEngine(
                             (subEff * 20f).roundToInt() * 50000 +
                                 subCrossoverHz.roundToInt() * 31
                             ) else 0) +
-                        (if (privilegedMbcActive) 10000 else 0)
+                        (if (privilegedMbcActive) 10000 else 0) +
+                        (if (separationMbcActive) 700000 else 0)
                     if (lastAppliedMbcKey[sid] != mbcKey) {
                         for (b in 0 until 6) {
-                            val mbcBand = when {
-                                b == 0 && subMbcActive -> {
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        subCrossoverHz,
-                                        45.0f,
-                                        260.0f,
-                                        2.2f,
-                                        -22.0f,
-                                        8.0f,
-                                        -58.0f,
-                                        1.35f,
-                                        (2.5f * subEff).coerceIn(0f, 4.5f),
-                                        (5.5f * subEff).coerceIn(0f, 9.0f)
-                                    )
-                                }
-                                b == 1 && subMbcActive -> {
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        maxOf(135.0f, subCrossoverHz + 25.0f),
-                                        25.0f,
-                                        110.0f,
-                                        2.5f,
-                                        -18.0f,
-                                        6.0f,
-                                        -55.0f,
-                                        1.15f,
-                                        (1.5f * subEff * (0.85f + 0.35f * subCrossoverScale)).coerceIn(0f, 3.2f),
-                                        (3.0f * subEff * (0.85f + 0.35f * subCrossoverScale)).coerceIn(0f, 5.8f)
-                                    )
-                                }
-                                b == 2 && subMbcActive -> {
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        320.0f,
-                                        8.0f,
-                                        90.0f,
-                                        3.0f,
-                                        -16.0f,
-                                        4.0f,
-                                        -60.0f,
-                                        1.0f,
-                                        0.0f,
-                                        (-2.5f * wInt).coerceIn(-4.0f, 0f)
-                                    )
-                                }
-                                b == 0 && (deepBassMbcActive || bassMbcActive) -> {
-                                    val preGainDb = (if (deepBassMbcActive) 1.6f else 0f) + (2.6f * bassNorm)
-                                    val postGainDb = (if (deepBassMbcActive) 2.8f else 0f) + (4.2f * bassNorm)
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        Dsp.MBC_CUTOFFS[0],
-                                        32.0f,
-                                        180.0f,
-                                        2.2f,
-                                        -20.0f,
-                                        8.0f,
-                                        -60.0f,
-                                        1.32f,
-                                        preGainDb.coerceIn(0f, 4.5f),
-                                        postGainDb.coerceIn(0f, 6.5f)
-                                    )
-                                }
-                                b == 1 && (deepBassMbcActive || bassMbcActive) -> {
-                                    val punchScale = if (bassMbcActive) bassNorm else 0.55f
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        Dsp.MBC_CUTOFFS[1],
-                                        26.0f,
-                                        130.0f,
-                                        2.0f,
-                                        -18.0f,
-                                        6.0f,
-                                        -58.0f,
-                                        1.20f,
-                                        (1.4f * punchScale).coerceIn(0f, 2.0f),
-                                        (2.6f * punchScale).coerceIn(0f, 3.5f)
-                                    )
-                                }
-                                dialogueActive && b in 2..3 -> {
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        Dsp.MBC_CUTOFFS[b],
-                                        2.5f,
-                                        55.0f,
-                                        1.0f + (0.5f * deFactor),
-                                        -1.5f,
-                                        8.0f,
-                                        if (privilegedMbcActive) -45.0f else -75.0f,
-                                        if (privilegedMbcActive) 1.25f else 1.0f,
-                                        0.0f,
-                                        0.8f * deFactor + (if (privilegedMbcActive) 0.6f else 0.0f)
-                                    )
-                                }
-                                privilegedMbcActive -> {
-                                    val isBassBand = b <= 1
-                                    val isVocalPresenceBand = b in 2..4
-                                    DynamicsProcessing.MbcBand(
-                                        true,
-                                        Dsp.MBC_CUTOFFS[b],
-                                        if (isBassBand) 20.0f else Dsp.MBC_ATTACK_MS[b],
-                                        if (isBassBand) 160.0f else Dsp.MBC_RELEASE_MS[b],
-                                        if (isBassBand) 1.8f else 1.35f,
-                                        if (isBassBand) -18.0f else -16.0f,
-                                        6.0f,
-                                        if (isVocalPresenceBand) -45.0f else -70.0f,
-                                        if (isVocalPresenceBand) 1.2f else 1.0f,
-                                        0.0f,
-                                        if (isBassBand) 0.9f else 0.5f
-                                    )
-                                }
-                                else -> {
-                                    DynamicsProcessing.MbcBand(
-                                        false,
-                                        Dsp.MBC_CUTOFFS[b],
-                                        Dsp.MBC_ATTACK_MS[b],
-                                        Dsp.MBC_RELEASE_MS[b],
-                                        1.0f,
-                                        0.0f,
-                                        6.0f,
-                                        -90.0f,
-                                        1.0f,
-                                        0.0f,
-                                        0.0f
-                                    )
+                            val mbcBand = if (!separationMbcActive) {
+                                DynamicsProcessing.MbcBand(
+                                    false,
+                                    Dsp.MBC_CUTOFFS[b],
+                                    Dsp.MBC_ATTACK_MS[b],
+                                    Dsp.MBC_RELEASE_MS[b],
+                                    1.0f,
+                                    0.0f,
+                                    6.0f,
+                                    -90.0f,
+                                    1.0f,
+                                    0.0f,
+                                    0.0f
+                                )
+                            } else {
+                                when (b) {
+                                    0 -> {
+                                        val cutoff0 = if (subMbcActive) subCrossoverHz else Dsp.MBC_CUTOFFS[0]
+                                        val preGain0 = when {
+                                            subMbcActive -> (2.2f * subEff).coerceIn(0f, 4.5f)
+                                            deepBassMbcActive || bassMbcActive ->
+                                                ((if (deepBassMbcActive) 1.4f else 0f) + 2.2f * bassNorm).coerceIn(0f, 4.2f)
+                                            else -> 0.5f * sepDrive
+                                        }
+                                        val postGain0 = when {
+                                            subMbcActive -> (4.8f * subEff).coerceIn(0f, 8.5f)
+                                            deepBassMbcActive || bassMbcActive ->
+                                                ((if (deepBassMbcActive) 2.6f else 0f) + 3.8f * bassNorm).coerceIn(0f, 6.2f)
+                                            else -> 1.2f * sepDrive
+                                        }
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            cutoff0,
+                                            32.0f,
+                                            100.0f,
+                                            3.2f,
+                                            -20.0f,
+                                            5.0f,
+                                            -60.0f,
+                                            1.18f,
+                                            preGain0,
+                                            postGain0
+                                        )
+                                    }
+                                    1 -> {
+                                        val cutoff1 = if (subMbcActive) {
+                                            maxOf(Dsp.MBC_CUTOFFS[1], subCrossoverHz + 40.0f)
+                                        } else {
+                                            Dsp.MBC_CUTOFFS[1]
+                                        }
+                                        val mudPostGain = if (subMbcActive) {
+                                            (-1.8f * wInt).coerceIn(-3.2f, -0.8f)
+                                        } else {
+                                            (-1.2f * sepDrive).coerceIn(-2.0f, -0.4f)
+                                        }
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            cutoff1,
+                                            8.0f,
+                                            85.0f,
+                                            2.8f,
+                                            -19.0f,
+                                            4.0f,
+                                            -60.0f,
+                                            1.0f,
+                                            0.0f,
+                                            mudPostGain
+                                        )
+                                    }
+                                    2 -> {
+                                        val midPost = (0.3f * sepDrive + (if (dialogueActive) 0.9f * deFactor else 0f))
+                                            .coerceIn(0f, 2.2f)
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            Dsp.MBC_CUTOFFS[2],
+                                            25.0f,
+                                            140.0f,
+                                            1.2f,
+                                            -10.0f,
+                                            6.0f,
+                                            if (dialogueActive) -52.0f else -60.0f,
+                                            if (dialogueActive) 1.15f else 1.05f,
+                                            0.0f,
+                                            midPost
+                                        )
+                                    }
+                                    3 -> {
+                                        val presencePost = (
+                                            0.9f * sepDrive +
+                                                0.45f * bassNorm +
+                                                (if (dialogueActive) 1.2f * deFactor else 0f)
+                                            ).coerceIn(0f, 3.0f)
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            Dsp.MBC_CUTOFFS[3],
+                                            22.0f,
+                                            110.0f,
+                                            1.6f,
+                                            -14.0f,
+                                            6.0f,
+                                            -52.0f,
+                                            1.25f,
+                                            0.0f,
+                                            presencePost
+                                        )
+                                    }
+                                    4 -> {
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            Dsp.MBC_CUTOFFS[4],
+                                            1.5f,
+                                            65.0f,
+                                            3.5f,
+                                            -15.0f,
+                                            4.0f,
+                                            -55.0f,
+                                            1.08f,
+                                            0.0f,
+                                            0.2f * sepDrive
+                                        )
+                                    }
+                                    else -> {
+                                        DynamicsProcessing.MbcBand(
+                                            true,
+                                            Dsp.MBC_CUTOFFS[5],
+                                            6.0f,
+                                            130.0f,
+                                            1.3f,
+                                            -16.0f,
+                                            6.0f,
+                                            -50.0f,
+                                            1.35f,
+                                            0.0f,
+                                            (1.4f * sepDrive).coerceIn(0f, 2.4f)
+                                        )
+                                    }
                                 }
                             }
                             dp.setMbcBandAllChannelsTo(b, mbcBand)

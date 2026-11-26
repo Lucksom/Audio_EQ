@@ -57,7 +57,8 @@ data class DeviceDiagnostics(
     val vendorOffloadEqualizerDetected: Boolean = false,
     val session0ControlActive: Boolean = false,
     val legacyEngineSummary: String = "Initializing",
-    val btDisableAbsVolActive: Boolean = false
+    val btDisableAbsVolActive: Boolean = false,
+    val stftFrameDurationMs: Float = 40.0f
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
@@ -301,7 +302,8 @@ class AudioEngineController(
         abxBypassCurve: Boolean = false,
         activeRoute: OutputRoute = currentRoute,
         musicOnlyTracking: Boolean = true,
-        legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO
+        legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
+        stftFrameDurationMs: Float = 40.0f
     ) {
         val prevMode = currentEngineMode
         val prevMusicOnly = latestRenderParams.musicOnlyTracking
@@ -361,7 +363,8 @@ class AudioEngineController(
             abxBypassCurve = abxBypassCurve,
             musicOnlyTracking = musicOnlyTracking,
             hardwareSampleRateHz = currentSampleRateHz,
-            legacyGlobalMixMode = legacyGlobalMixMode
+            legacyGlobalMixMode = legacyGlobalMixMode,
+            stftFrameDurationMs = stftFrameDurationMs
         )
         latestRenderParams = params
         masterEngine.updateParams(params)
@@ -413,7 +416,8 @@ class AudioEngineController(
             vendorOffloadEqualizerDetected = masterEngine.vendorOffloadEqualizerDetected,
             session0ControlActive = masterEngine.hasSession0Control(),
             legacyEngineSummary = masterEngine.getLegacyEngineSummary(),
-            btDisableAbsVolActive = btAbsVolDisabledState
+            btDisableAbsVolActive = btAbsVolDisabledState,
+            stftFrameDurationMs = latestRenderParams.stftFrameDurationMs
         )
         if (_diagnostics.value != newDiag) {
             _diagnostics.value = newDiag

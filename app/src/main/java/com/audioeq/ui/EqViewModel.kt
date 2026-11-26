@@ -110,6 +110,7 @@ data class EqUiState(
     val seedHex: String = "#9A3412",
     val isSeedFromWallpaper: Boolean = false,
     val useKnobs: Boolean = false,
+    val stftFrameDurationMs: Float = 40.0f,
     val showSavePresetDialog: Boolean = false,
     val showRootWarningDialog: Boolean = false,
     val showCalibrationSheet: Boolean = false,
@@ -284,7 +285,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         Intermediate3B(theme, seed, wall, musicOnly, knobs)
     }
 
-    private val flowP3 = combine(flow3A, flow3B) { a, b ->
+    private val flowP3 = combine(flow3A, flow3B, repository.stftFrameDurationMs) { a, b, stftMs ->
         PartialUiState3(
             selectedMusicPackages = a.selectedMusicPackages,
             compatibility10Band = a.compatibility10Band,
@@ -295,7 +296,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             themeMode = b.themeMode,
             seedHex = b.seedHex,
             isSeedFromWallpaper = b.isSeedFromWallpaper,
-            useKnobs = b.useKnobs
+            useKnobs = b.useKnobs,
+            stftFrameDurationMs = stftMs
         )
     }
 
@@ -521,6 +523,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             seedHex = p3.seedHex,
             isSeedFromWallpaper = p3.isSeedFromWallpaper,
             useKnobs = p3.useKnobs,
+            stftFrameDurationMs = p3.stftFrameDurationMs,
             showSavePresetDialog = p5.showSavePresetDialog,
             showRootWarningDialog = p5.showRootWarningDialog,
             showCalibrationSheet = p5.showCalibrationSheet,
@@ -640,7 +643,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     abxBypassCurve = state.isAbCompare,
                     activeRoute = state.activeRoute,
                     musicOnlyTracking = state.musicOnlyTrackingEnabled,
-                    legacyGlobalMixMode = state.legacyGlobalMixMode
+                    legacyGlobalMixMode = state.legacyGlobalMixMode,
+                    stftFrameDurationMs = state.stftFrameDurationMs
                 )
                 EqualizerNotificationHelper.updateOrCancelPersistentNotification(
                     context = getApplication(),
@@ -1525,6 +1529,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.setUseKnobs(enabled)
     }
 
+    fun setStftFrameDurationMs(ms: Float) {
+        repository.setStftFrameDurationMs(ms)
+    }
+
     fun setSeedHex(hex: String, fromWallpaper: Boolean = false) {
         repository.setSeedHex(hex, fromWallpaper)
     }
@@ -1772,7 +1780,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val themeMode: String,
         val seedHex: String,
         val isSeedFromWallpaper: Boolean,
-        val useKnobs: Boolean
+        val useKnobs: Boolean,
+        val stftFrameDurationMs: Float = 40.0f
     )
 
     private data class PartialUiState4(

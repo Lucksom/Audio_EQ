@@ -631,12 +631,15 @@ object EnhancerDsp {
             val shelfGain = (boost * 0.88) / sqrt(1.0 + ratio.pow(4.0))
 
             val logDist55 = ln(f / 55.0)
-            val punchBell = (boost * 0.42) * exp(-0.5 * (logDist55 / 0.38).pow(2.0))
+            val punchBell = (boost * 0.44) * exp(-0.5 * (logDist55 / 0.36).pow(2.0))
 
-            val logDist105 = ln(f / 105.0)
-            val upperPunchBell = (boost * 0.24) * exp(-0.5 * (logDist105 / 0.32).pow(2.0))
+            val logDist82 = ln(f / 82.0)
+            val upperPunchBell = (boost * 0.28) * exp(-0.5 * (logDist82 / 0.30).pow(2.0))
 
-            result[i] = (shelfGain + punchBell + upperPunchBell).coerceIn(0.0, boost)
+            val logDist2500 = ln(f / 2500.0)
+            val beaterClickBell = (boost * 0.20) * exp(-0.5 * (logDist2500 / 0.28).pow(2.0))
+
+            result[i] = (shelfGain + punchBell + upperPunchBell + beaterClickBell).coerceIn(0.0, boost)
         }
         return result
     }

@@ -32,11 +32,11 @@ enum class EqMode(val bandCount: Int) {
 }
 
 data class MbcConfig(
-    val baseThresholdDb: FloatArray = floatArrayOf(-12f, -14f, -16f, -16f, -18f, -20f),
-    val attackMs: FloatArray = floatArrayOf(20f, 15f, 10f, 8f, 5f, 5f),
-    val releaseMs: FloatArray = floatArrayOf(120f, 100f, 80f, 60f, 50f, 40f),
-    val ratio: FloatArray = floatArrayOf(2.5f, 2.5f, 2.0f, 2.0f, 1.8f, 1.5f),
-    val kneeDb: FloatArray = floatArrayOf(6f, 6f, 6f, 6f, 6f, 6f)
+    val baseThresholdDb: FloatArray = floatArrayOf(-20f, -19f, -10f, -14f, -15f, -16f),
+    val attackMs: FloatArray = floatArrayOf(32f, 8f, 25f, 22f, 1.5f, 6f),
+    val releaseMs: FloatArray = floatArrayOf(100f, 85f, 140f, 110f, 65f, 130f),
+    val ratio: FloatArray = floatArrayOf(3.2f, 2.8f, 1.2f, 1.6f, 3.5f, 1.3f),
+    val kneeDb: FloatArray = floatArrayOf(5f, 4f, 6f, 6f, 4f, 6f)
 )
 
 enum class EngineMode(

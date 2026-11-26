@@ -1220,6 +1220,7 @@ fun SettingsAndDiagnosticsSheet(
     selectedMusicPackages: Set<String> = emptySet(),
     legacyGlobalMixMode: LegacyGlobalMixMode = LegacyGlobalMixMode.AUTO,
     useKnobs: Boolean = false,
+    stftFrameDurationMs: Float = 40.0f,
     onSelectMode: (EngineMode) -> Unit,
     onSelectLegacyGlobalMixMode: (LegacyGlobalMixMode) -> Unit = {},
     onShizukuAction: () -> Unit,
@@ -1228,6 +1229,7 @@ fun SettingsAndDiagnosticsSheet(
     onToggleUsbBitPerfect: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
+    onSelectStftFrameDurationMs: (Float) -> Unit = {},
     onToggleBtAbsVol: (Boolean) -> Unit = {},
     onToggleMusicOnlyTracking: (Boolean) -> Unit = {},
     onToggleMusicPackage: (String) -> Unit = {},
@@ -1644,6 +1646,63 @@ fun SettingsAndDiagnosticsSheet(
             }
 
             SettingsGroupCard(title = "RENDERER & USB DAC") {
+                val activeStftKey = when {
+                    stftFrameDurationMs < 15.0f -> "10"
+                    stftFrameDurationMs < 30.0f -> "20"
+                    else -> "40"
+                }
+                val stftSubtitle = when (activeStftKey) {
+                    "10" -> "93.8 Hz/bin (512 FFT) · Android default low-latency window"
+                    "20" -> "46.9 Hz/bin (1024 FFT) · Balanced sub-bass & fast transient snap"
+                    else -> "23.4 Hz/bin (2048 FFT) · Precision 1/3-octave bass & mud separation"
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "STFT Frame Duration (FFT Resolution)",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp,
+                            color = palette.onSurface
+                        )
+                        Text(
+                            text = "${activeStftKey} ms",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp,
+                            color = palette.primary
+                        )
+                    }
+                    Text(
+                        text = stftSubtitle,
+                        fontSize = 11.5.sp,
+                        color = palette.onVar
+                    )
+                    V7SegmentedRow(
+                        options = listOf(
+                            "10" to "10 ms",
+                            "20" to "20 ms",
+                            "40" to "40 ms (2048)"
+                        ),
+                        selectedValue = activeStftKey,
+                        enabled = !transientMode,
+                        onSelect = { selectedKey ->
+                            val nextMs = when (selectedKey) {
+                                "10" -> 10.0f
+                                "20" -> 20.0f
+                                else -> 40.0f
+                            }
+                            onSelectStftFrameDurationMs(nextMs)
+                        },
+                        modifier = Modifier.testTag("stft_frame_duration_selector")
+                    )
+                }
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
                 V7SwitchRow(
                     title = "Compatibility mode (10 bands)",
@@ -1657,8 +1716,8 @@ fun SettingsAndDiagnosticsSheet(
                 HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
                 V7SwitchRow(
-                    title = "Transient mode (time resolution)",
-                    subtitle = "Rebuild DynamicsProcessing favoring time resolution",
+                    title = "Transient mode (5 ms ultra-short override)",
+                    subtitle = "Overrides STFT window to 5 ms favoring maximum transient speed",
                     checked = transientMode,
                     enabled = true,
                     onCheckedChange = onToggleTransientMode,

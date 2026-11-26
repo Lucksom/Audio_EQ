@@ -113,6 +113,11 @@ class EqRepository(context: Context) {
     )
     val useKnobs: StateFlow<Boolean> = _useKnobs.asStateFlow()
 
+    private val _stftFrameDurationMs = MutableStateFlow(
+        prefs.getFloat(KEY_STFT_FRAME_DURATION_MS, 40.0f)
+    )
+    val stftFrameDurationMs: StateFlow<Float> = _stftFrameDurationMs.asStateFlow()
+
     private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
         when (key) {
             KEY_MASTER_ENABLED -> _masterEnabled.value = sp.getBoolean(KEY_MASTER_ENABLED, true)
@@ -145,6 +150,7 @@ class EqRepository(context: Context) {
         private const val KEY_MUSIC_ONLY_TRACKING = "music_only_tracking"
         private const val KEY_GITHUB_REPO = "github_repo"
         private const val KEY_USE_KNOBS = "use_knobs_mode"
+        private const val KEY_STFT_FRAME_DURATION_MS = "stft_frame_duration_ms"
     }
 
     private fun loadInitialGithubRepo(): String {
@@ -269,6 +275,16 @@ class EqRepository(context: Context) {
     fun setUseKnobs(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_USE_KNOBS, enabled).apply()
         _useKnobs.value = enabled
+    }
+
+    fun setStftFrameDurationMs(ms: Float) {
+        val normalized = when {
+            ms < 15.0f -> 10.0f
+            ms < 30.0f -> 20.0f
+            else -> 40.0f
+        }
+        prefs.edit().putFloat(KEY_STFT_FRAME_DURATION_MS, normalized).apply()
+        _stftFrameDurationMs.value = normalized
     }
 
     fun setSeedHex(hex: String, fromWallpaper: Boolean = false) {

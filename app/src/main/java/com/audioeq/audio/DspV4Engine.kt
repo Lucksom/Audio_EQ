@@ -63,15 +63,15 @@ object Dsp {
     val SLIDER_HZ = doubleArrayOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
     val RENDER_HZ = DoubleArray(31) { 20.0 * 2.0.pow(it / 3.0) }
     val RENDER_CUT = FloatArray(31) { min(RENDER_HZ[it] * 2.0.pow(1.0 / 6.0), 20000.0).toFloat() }
-    val MBC_RANGE = arrayOf(0..6, 7..12, 13..18, 19..24, 25..27, 28..30)
-    val MBC_CUT = floatArrayOf(RENDER_CUT[6], RENDER_CUT[12], RENDER_CUT[18], RENDER_CUT[24], RENDER_CUT[27], 20000f)
+    val MBC_RANGE = arrayOf(0..7, 8..12, 13..19, 20..24, 25..27, 28..30)
+    val MBC_CUT = floatArrayOf(118f, 330f, 1800f, 4800f, 9500f, 20000f)
 
     val F_USER: DoubleArray get() = SLIDER_HZ
     val F_DP: DoubleArray get() = RENDER_HZ
     val MBC_CUTOFFS: FloatArray get() = MBC_CUT
-    val MBC_ATTACK_MS = floatArrayOf(20f, 15f, 10f, 8f, 5f, 5f)
-    val MBC_RELEASE_MS = floatArrayOf(120f, 100f, 80f, 60f, 50f, 40f)
-    const val LIM_ATTACK_MS = 2.0f
+    val MBC_ATTACK_MS = floatArrayOf(32f, 8f, 25f, 22f, 1.5f, 6f)
+    val MBC_RELEASE_MS = floatArrayOf(100f, 85f, 140f, 110f, 65f, 130f)
+    const val LIM_ATTACK_MS = 1.0f
     const val LIM_RELEASE_MS = 50.0f
     const val LIM_RATIO = 10.0f
 
