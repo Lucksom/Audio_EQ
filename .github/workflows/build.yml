@@ -44,7 +44,8 @@ jobs:
           path: |
             /usr/local/lib/android/sdk/platforms/android-36*
             /usr/local/lib/android/sdk/build-tools/36*
-          key: android-sdk-36-${{ runner.os }}
+            ~/.m2/repository/org/robolectric
+          key: android-sdk-36-robolectric-${{ runner.os }}
 
       - name: Accept Android SDK Licenses
         run: |

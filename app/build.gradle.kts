@@ -79,7 +79,10 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       all {
-        it.systemProperty("robolectric.dependency.dir", "/home/appuser/.m2/repository/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7")
+        val localRoboDir = file("/home/appuser/.m2/repository/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7")
+        if (localRoboDir.isDirectory) {
+          it.systemProperty("robolectric.dependency.dir", localRoboDir.absolutePath)
+        }
       }
     }
   }
