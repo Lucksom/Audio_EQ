@@ -412,18 +412,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             DoubleArray(31)
         }
-        val scaledUser10 = sliderGains.map { (if (p1.isEqEnabled) it * p1.intensity else 0f).toDouble() }.toDoubleArray()
-        val enh31 = EnhancerDsp.computeCombinedEnhancer31(
-            config = p1.enhancerConfig,
-            isSpeaker = p1.activeRoute == OutputRoute.SPEAKER,
-            sampleRate = p2.diagnostics.hardwareSampleRateHz.toDouble(),
-            userBand0Db = scaledUser10.getOrElse(0) { 0.0 },
-            userBand1Db = scaledUser10.getOrElse(1) { 0.0 }
-        )
-        val deepShift31 = EnhancerDsp.computeDeepBassShiftDelta31(
-            userGains10 = scaledUser10,
-            deepBassEnabled = p1.enhancerConfig.deepBassEnabled
-        )
         val baseWithTone10 = EqConstants.FREQ_10_BAND.indices.map { i ->
             val eqGain = if (p1.isEqEnabled) sliderGains.getOrElse(i) { 0f } * p1.intensity else 0f
             val fHz = EqConstants.FREQ_10_BAND[i].toDouble()
@@ -433,19 +421,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             val tiltAtBand = tilt31.getOrElse(nearestIdx) { 0.0 }.toFloat()
             val hpAtBand = hpCorr31.getOrElse(nearestIdx) { 0.0 }.toFloat()
             val contourAtBand = contour10.getOrElse(i) { 0.0 }.toFloat()
-            eqGain + tiltAtBand + hpAtBand + contourAtBand
+            (eqGain + tiltAtBand + hpAtBand + contourAtBand).coerceIn(-12.0f, 12.0f)
         }
         val effectiveGains = if (!p1.masterEnabled || p1.isAbCompare) {
             List(10) { 0f }
         } else {
-            EqConstants.FREQ_10_BAND.indices.map { i ->
-                val fHz = EqConstants.FREQ_10_BAND[i].toDouble()
-                val nearestIdx = EqConstants.BAND_FREQUENCIES_31.indices.minByOrNull {
-                    kotlin.math.abs(EqConstants.BAND_FREQUENCIES_31[it] - fHz)
-                } ?: 0
-                val enhOffset = (enh31.getOrElse(nearestIdx) { 0.0 } + deepShift31.getOrElse(nearestIdx) { 0.0 }).toFloat()
-                (baseWithTone10.getOrElse(i) { 0f } + enhOffset).coerceIn(-12.0f, 12.0f)
-            }
+            baseWithTone10
         }
         val computedCeilingDb = if (!p1.masterEnabled || p1.isAbCompare) {
             0.0f
@@ -1064,7 +1045,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDialogueEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextAmt = if (enabled && cur.dialogueAmount <= 0) 6 else cur.dialogueAmount
+            val nextAmt = if (enabled && cur.dialogueAmount <= 0) 2 else cur.dialogueAmount
             cur.copy(
                 dialogueEnhancerEnabled = enabled,
                 dialogueAmount = nextAmt
@@ -1092,7 +1073,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBassEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextDb = if (enabled && cur.bassBoostDb < 0.5f) 3.5f else cur.bassBoostDb
+            val nextDb = if (enabled && cur.bassBoostDb < 0.1f) 0.8f else cur.bassBoostDb
             cur.copy(
                 bassEnabled = enabled,
                 bassBoostDb = nextDb,
@@ -1119,7 +1100,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setVirtualBassEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextStr = if (enabled && cur.virtualBassStrength < 0.05f) 0.55f else cur.virtualBassStrength
+            val nextStr = if (enabled && cur.virtualBassStrength < 0.02f) 0.15f else cur.virtualBassStrength
             cur.copy(
                 virtualBassEnabled = enabled,
                 virtualBassStrength = nextStr
@@ -1139,7 +1120,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSurroundEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextWidth = if (enabled && cur.surroundWidth < 0.05f) 0.45f else cur.surroundWidth
+            val nextWidth = if (enabled && cur.surroundWidth < 0.02f) 0.15f else cur.surroundWidth
             cur.copy(
                 surroundEnabled = enabled,
                 surroundWidth = nextWidth
@@ -1159,10 +1140,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSubwooferEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextIntensity = if (enabled && cur.subwooferIntensity < 0.05f) 0.85f else cur.subwooferIntensity
+            val nextIntensity = if (enabled && cur.subwooferIntensity < 0.02f) 0.20f else cur.subwooferIntensity
+            val nextSubOct = if (enabled && cur.subwooferSubOctaveMix < 0.01f) 0.08f else cur.subwooferSubOctaveMix
             cur.copy(
                 subwooferEnabled = enabled,
                 subwooferIntensity = nextIntensity,
+                subwooferSubOctaveMix = nextSubOct,
                 bassEnabled = if (enabled) false else cur.bassEnabled
             )
         }

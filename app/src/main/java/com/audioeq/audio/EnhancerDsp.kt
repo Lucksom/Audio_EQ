@@ -87,15 +87,15 @@ data class EnhancerConfig(
     val bassEnabled: Boolean = false,
     val bassBoostDb: Float = 0.0f,
     val virtualBassEnabled: Boolean = false,
-    val virtualBassStrength: Float = 0.5f,
+    val virtualBassStrength: Float = 0.0f,
     val deepBassEnabled: Boolean = false,
     val dialogueEnhancerEnabled: Boolean = false,
-    val dialogueAmount: Int = 8,
+    val dialogueAmount: Int = 0,
     val surroundEnabled: Boolean = false,
-    val surroundWidth: Float = 0.45f,
+    val surroundWidth: Float = 0.0f,
     val subwooferEnabled: Boolean = false,
-    val subwooferIntensity: Float = 0.85f,
-    val subwooferSubOctaveMix: Float = 0.35f,
+    val subwooferIntensity: Float = 0.0f,
+    val subwooferSubOctaveMix: Float = 0.0f,
     val subwooferAutoLoudness: Boolean = true,
     val subwooferCrossoverHz: Float = 58.0f
 ) {
@@ -401,16 +401,16 @@ object EnhancerDsp {
             deepBassEnabled = current.deepBassEnabled,
             bassEnabled = if (current.subwooferEnabled) false else bassEnabledKeepOrDefault(current, profile),
             bassBoostDb = when {
-                profile == AudioProfile.VIDEO && current.bassBoostDb < 2.0f -> 2.5f
-                profile == AudioProfile.DYNAMIC && current.bassBoostDb < 1.5f -> 2.0f
+                profile == AudioProfile.VIDEO && current.bassBoostDb < 0.2f -> 0.9f
+                profile == AudioProfile.DYNAMIC && current.bassBoostDb < 0.2f -> 0.8f
                 else -> current.bassBoostDb
             },
             virtualBassEnabled = spec.virtualBassAuto,
-            virtualBassStrength = if (spec.virtualBassAuto) max(current.virtualBassStrength, 0.55f) else current.virtualBassStrength,
+            virtualBassStrength = if (spec.virtualBassAuto && current.virtualBassStrength < 0.05f) 0.15f else current.virtualBassStrength,
             dialogueEnhancerEnabled = spec.deEnabled,
-            dialogueAmount = if (spec.deEnabled) spec.deAmount else current.dialogueAmount,
+            dialogueAmount = if (spec.deEnabled && current.dialogueAmount <= 0) 2 else current.dialogueAmount,
             surroundEnabled = spec.virtualizerEnabled,
-            surroundWidth = if (spec.virtualizerEnabled) spec.virtualizerWidth else current.surroundWidth
+            surroundWidth = if (spec.virtualizerEnabled && current.surroundWidth < 0.05f) 0.15f else current.surroundWidth
         )
     }
 
@@ -526,6 +526,7 @@ object EnhancerDsp {
         return 10.0 * log10(magSq.coerceAtLeast(1e-12))
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun computeDeepBassCurve31(
         config: EnhancerConfig,
         sampleRate: Double = 48000.0,
@@ -537,14 +538,14 @@ object EnhancerDsp {
         if (!active) return result
 
         val driveScale = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
-            (config.bassBoostDb.toDouble() / 4.5).coerceIn(0.65, 1.35)
+            (0.85 + (config.bassBoostDb.toDouble() / 12.0)).coerceIn(0.85, 1.25)
         } else {
             1.0
         }
 
-        val g0ShelfDb = (userBand0Db.coerceIn(-12.0, 12.0) + 4.5 * driveScale).coerceIn(2.5, 10.5)
-        val g1PeakDb = (userBand1Db.coerceIn(-12.0, 12.0) + 3.5 * driveScale).coerceIn(2.0, 9.0)
-        val gMudCutDb = (-2.5 * driveScale).coerceIn(-3.5, -1.5)
+        val g0ShelfDb = (3.4 * driveScale).coerceIn(2.5, 4.5)
+        val g1PeakDb = (2.2 * driveScale).coerceIn(1.6, 3.2)
+        val gMudCutDb = (-1.4 * driveScale).coerceIn(-2.0, -1.0)
 
         val freqs = EqConstants.BAND_FREQUENCIES_31
         for (i in 0 until 31) {
@@ -570,7 +571,7 @@ object EnhancerDsp {
                 q = 1.40,
                 sampleRate = sampleRate
             )
-            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-4.5, 12.0)
+            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-3.0, 6.0)
         }
         return result
     }

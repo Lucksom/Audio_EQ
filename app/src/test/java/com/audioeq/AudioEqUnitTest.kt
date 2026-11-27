@@ -422,9 +422,9 @@ class AudioEqUnitTest {
             userBand1Db = 2.0
         )
         assertEquals(31, deepCurve.size)
-        assertTrue("20 Hz sub-bass lift must exceed +6 dB", deepCurve[0] > 6.0)
-        assertTrue("31.5 Hz sub-bass lift must exceed +5.5 dB", deepCurve[2] > 5.5)
-        assertTrue("50 Hz fundamental peak must exceed +4.5 dB", deepCurve[4] > 4.5)
+        assertTrue("20 Hz sub-bass lift must exceed +3.8 dB", deepCurve[0] > 3.8)
+        assertTrue("31.5 Hz sub-bass lift must exceed +3.5 dB", deepCurve[2] > 3.5)
+        assertTrue("50 Hz fundamental peak must exceed +2.8 dB", deepCurve[4] > 2.8)
         assertTrue("200 Hz anti-mud region must carve a negative pocket (< -1.0 dB)", deepCurve[10] < -1.0)
     }
 
@@ -513,6 +513,7 @@ class AudioEqUnitTest {
                 profile = AudioProfile.OFF,
                 subwooferEnabled = true,
                 subwooferIntensity = 1.25f,
+                subwooferSubOctaveMix = 0.35f,
                 deepBassEnabled = false,
                 bassEnabled = false
             )
@@ -522,6 +523,7 @@ class AudioEqUnitTest {
                 profile = AudioProfile.OFF,
                 subwooferEnabled = true,
                 subwooferIntensity = 1.25f,
+                subwooferSubOctaveMix = 0.35f,
                 deepBassEnabled = false,
                 bassEnabled = true,
                 bassBoostDb = 6.0f
@@ -535,6 +537,7 @@ class AudioEqUnitTest {
                 profile = AudioProfile.OFF,
                 subwooferEnabled = true,
                 subwooferIntensity = 1.25f,
+                subwooferSubOctaveMix = 0.35f,
                 deepBassEnabled = true,
                 bassEnabled = false
             )

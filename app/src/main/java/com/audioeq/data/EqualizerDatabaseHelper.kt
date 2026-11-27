@@ -94,14 +94,14 @@ class EqualizerDatabaseHelper(context: Context) :
             CREATE TABLE IF NOT EXISTS enhancer_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 dialogue_enabled INTEGER NOT NULL DEFAULT 0,
-                dialogue_amount INTEGER NOT NULL DEFAULT 8,
+                dialogue_amount INTEGER NOT NULL DEFAULT 0,
                 bass_enabled INTEGER NOT NULL DEFAULT 0,
                 bass_boost_db REAL NOT NULL DEFAULT 0.0,
                 virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
-                virtual_bass_strength REAL NOT NULL DEFAULT 0.5,
+                virtual_bass_strength REAL NOT NULL DEFAULT 0.0,
                 deep_bass_enabled INTEGER NOT NULL DEFAULT 0,
                 surround_enabled INTEGER NOT NULL DEFAULT 0,
-                surround_width REAL NOT NULL DEFAULT 0.45,
+                surround_width REAL NOT NULL DEFAULT 0.0,
                 audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
             )
             """.trimIndent()
@@ -140,14 +140,14 @@ class EqualizerDatabaseHelper(context: Context) :
                 CREATE TABLE IF NOT EXISTS enhancer_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     dialogue_enabled INTEGER NOT NULL DEFAULT 0,
-                    dialogue_amount INTEGER NOT NULL DEFAULT 8,
+                    dialogue_amount INTEGER NOT NULL DEFAULT 0,
                     bass_enabled INTEGER NOT NULL DEFAULT 0,
                     bass_boost_db REAL NOT NULL DEFAULT 0.0,
                     virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
-                    virtual_bass_strength REAL NOT NULL DEFAULT 0.5,
+                    virtual_bass_strength REAL NOT NULL DEFAULT 0.0,
                     deep_bass_enabled INTEGER NOT NULL DEFAULT 0,
                     surround_enabled INTEGER NOT NULL DEFAULT 0,
-                    surround_width REAL NOT NULL DEFAULT 0.45,
+                    surround_width REAL NOT NULL DEFAULT 0.0,
                     audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
                 )
                 """.trimIndent()
@@ -231,14 +231,14 @@ class EqualizerDatabaseHelper(context: Context) :
         val cv = ContentValues().apply {
             put("id", 1)
             put("dialogue_enabled", 0)
-            put("dialogue_amount", 8)
+            put("dialogue_amount", 0)
             put("bass_enabled", 0)
             put("bass_boost_db", 0.0f)
             put("virtual_bass_enabled", 0)
-            put("virtual_bass_strength", 0.5f)
+            put("virtual_bass_strength", 0.0f)
             put("deep_bass_enabled", 0)
             put("surround_enabled", 0)
-            put("surround_width", 0.45f)
+            put("surround_width", 0.0f)
             put("audio_profile_id", AudioProfile.OFF.id)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
@@ -317,8 +317,10 @@ class EqualizerDatabaseHelper(context: Context) :
     fun loadEnhancerConfig(): EnhancerConfig {
         val db = readableDatabase
         val subEnabled = getSetting("subwoofer_enabled", "0") == "1"
-        val subIntensity = getSetting("subwoofer_intensity", "0.85").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.85f
-        val subOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.35").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.35f
+        val rawSubIntensity = getSetting("subwoofer_intensity", "0.0").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.0f
+        val subIntensity = if (!subEnabled) 0.0f else rawSubIntensity
+        val rawSubOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.0").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.0f
+        val subOctaveMix = if (!subEnabled) 0.0f else rawSubOctaveMix
         val subAutoLoudness = getSetting("subwoofer_auto_loudness", "1") == "1"
         val subCrossoverHz = getSetting("subwoofer_crossover_hz", "58.0").toFloatOrNull()?.coerceIn(55f, 120f) ?: 58.0f
         db.rawQuery(
@@ -334,14 +336,14 @@ class EqualizerDatabaseHelper(context: Context) :
         ).use { cursor ->
             if (cursor.moveToFirst()) {
                 val dlgOn = cursor.getInt(0) == 1
-                val dlgAmt = cursor.getInt(1).coerceIn(0, 16)
+                val dlgAmt = if (dlgOn) cursor.getInt(1).coerceIn(0, 16) else 0
                 val bassOn = cursor.getInt(2) == 1
-                val bassDb = cursor.getFloat(3).coerceIn(0f, 6f)
+                val bassDb = if (bassOn) cursor.getFloat(3).coerceIn(0f, 6f) else 0.0f
                 val vBassOn = cursor.getInt(4) == 1
-                val vBassStr = cursor.getFloat(5).coerceIn(0f, 1f)
+                val vBassStr = if (vBassOn) cursor.getFloat(5).coerceIn(0f, 1f) else 0.0f
                 val deepBassOn = cursor.getInt(6) == 1
                 val surrOn = cursor.getInt(7) == 1
-                val surrWidth = cursor.getFloat(8).coerceIn(0f, 1f)
+                val surrWidth = if (surrOn) cursor.getFloat(8).coerceIn(0f, 1f) else 0.0f
                 val prof = AudioProfile.fromId(cursor.getString(9))
                 return EnhancerConfig(
                     profile = prof,
