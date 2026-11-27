@@ -1,10 +1,6 @@
 name: Build and Release Android APK
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 permissions:
@@ -119,6 +115,23 @@ jobs:
             echo "- **App Version:** \`${APP_VERSION_NAME}\` (Build \`${APP_VERSION_CODE}\`)"
             echo "- **Commit:** \`${SHORT_SHA}\` (Run #${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT})"
           } > "$NOTES_FILE"
+
+      - name: Run Unit Tests
+        run: |
+          GRADLE_CMD="gradle"
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            GRADLE_CMD="./gradlew"
+          fi
+          $GRADLE_CMD :app:testDebugUnitTest \
+            --parallel \
+            --build-cache \
+            --configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx8g -XX:+UseParallelGC -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
+            -Dorg.gradle.workers.max=4 \
+            -Djava.awt.headless=true
+        env:
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
 
       - name: Build Signed Release APK (Max Free Runner Performance)
         run: |
