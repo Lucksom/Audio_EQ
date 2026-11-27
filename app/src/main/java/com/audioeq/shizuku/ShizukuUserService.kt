@@ -22,7 +22,8 @@ class ShizukuUserService() : IUserService.Stub() {
         val process = ProcessBuilder("sh", "-c", command)
             .redirectErrorStream(true)
             .start()
-        val output = process.inputStream.bufferedReader().readText()
+        runCatching { process.outputStream.close() }
+        val output = process.inputStream.bufferedReader().use { it.readText() }
         val code = process.waitFor()
         if (code == 0) output else "ERROR($code): $output"
     } catch (t: Throwable) {

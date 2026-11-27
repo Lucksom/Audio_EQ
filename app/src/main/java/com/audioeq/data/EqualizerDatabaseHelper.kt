@@ -140,7 +140,7 @@ class EqualizerDatabaseHelper(context: Context) :
                 subwoofer_intensity REAL NOT NULL DEFAULT 0.0,
                 subwoofer_sub_octave_mix REAL NOT NULL DEFAULT 0.0,
                 subwoofer_auto_loudness INTEGER NOT NULL DEFAULT 1,
-                subwoofer_crossover_hz REAL NOT NULL DEFAULT 58.0,
+                subwoofer_crossover_hz REAL NOT NULL DEFAULT 80.0,
                 audio_profile_id TEXT NOT NULL DEFAULT 'profile_off',
                 updated_at INTEGER NOT NULL DEFAULT 0
             )

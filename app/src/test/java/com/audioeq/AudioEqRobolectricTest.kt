@@ -420,4 +420,143 @@ class AudioEqRobolectricTest {
             engine.release()
         }
     }
+
+    @Test
+    fun `verify Bass Enhancer scales clearly and monotonically from 1 dB to 6 dB`() {
+        val freqs = com.audioeq.model.EqConstants.BAND_FREQUENCIES_31
+        val idx63 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 63.0) } ?: 5
+        val idx100 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 100.0) } ?: 7
+
+        val curveOff = com.audioeq.audio.EnhancerDsp.computeBassEnhancer31(
+            com.audioeq.audio.EnhancerConfig(bassEnabled = false, bassBoostDb = 6.0f)
+        )
+        assertEquals(0.0, curveOff[idx63], 0.001)
+
+        val curve1Db = com.audioeq.audio.EnhancerDsp.computeBassEnhancer31(
+            com.audioeq.audio.EnhancerConfig(bassEnabled = true, bassBoostDb = 1.0f)
+        )
+        val curve3Db = com.audioeq.audio.EnhancerDsp.computeBassEnhancer31(
+            com.audioeq.audio.EnhancerConfig(bassEnabled = true, bassBoostDb = 3.0f)
+        )
+        val curve6Db = com.audioeq.audio.EnhancerDsp.computeBassEnhancer31(
+            com.audioeq.audio.EnhancerConfig(bassEnabled = true, bassBoostDb = 6.0f)
+        )
+
+        assertTrue("1 dB Bass Enhancer should lift 63 Hz by > 1.0 dB", curve1Db[idx63] > 1.0)
+        assertTrue("3 dB Bass Enhancer should exceed 1 dB at 63 Hz", curve3Db[idx63] > curve1Db[idx63] + 2.0)
+        assertTrue("6 dB Bass Enhancer should exceed 1 dB by at least 5.0 dB at 63 Hz", curve6Db[idx63] - curve1Db[idx63] >= 5.0)
+        assertTrue("6 dB Bass Enhancer should deliver noticeable upper-bass lift at 100 Hz", curve6Db[idx100] > curve1Db[idx100] + 3.0)
+    }
+
+    @Test
+    fun `verify Subwoofer curve delivers strong earbud-audible sub-bass lift and responds to crossover and sub-octave mix`() {
+        val baseCfg = com.audioeq.audio.EnhancerConfig(
+            subwooferEnabled = true,
+            subwooferIntensity = 0.65f,
+            subwooferSubOctaveMix = 0.25f
+        )
+        assertEquals(80.0f, baseCfg.subwooferCrossoverHz, 0.01f)
+
+        val baseCurve = com.audioeq.audio.EnhancerDsp.computeSubwooferCurve31(baseCfg)
+        assertTrue("20 Hz band must not be cut negative on earbuds", baseCurve[0] >= 0.0)
+        assertTrue("40 Hz band must deliver strong > +4.0 dB lift", baseCurve[3] > 4.0)
+        assertTrue("50 Hz band must deliver strong > +4.0 dB lift", baseCurve[4] > 4.0)
+        assertTrue("63 Hz band must deliver strong > +3.5 dB lift", baseCurve[5] > 3.5)
+
+        val lowXoverCurve = com.audioeq.audio.EnhancerDsp.computeSubwooferCurve31(
+            baseCfg.copy(subwooferCrossoverHz = 58.0f)
+        )
+        val highXoverCurve = com.audioeq.audio.EnhancerDsp.computeSubwooferCurve31(
+            baseCfg.copy(subwooferCrossoverHz = 110.0f)
+        )
+        assertTrue(
+            "Raising crossover from 58 Hz to 110 Hz should boost 100 Hz band",
+            highXoverCurve[7] > lowXoverCurve[7] + 0.5
+        )
+
+        val lowSubOctCurve = com.audioeq.audio.EnhancerDsp.computeSubwooferCurve31(
+            baseCfg.copy(subwooferSubOctaveMix = 0.0f)
+        )
+        val highSubOctCurve = com.audioeq.audio.EnhancerDsp.computeSubwooferCurve31(
+            baseCfg.copy(subwooferSubOctaveMix = 0.50f)
+        )
+        assertTrue(
+            "Increasing sub-octave mix should boost 31.5 Hz sub-bass band",
+            highSubOctCurve[2] > lowSubOctCurve[2] + 0.5
+        )
+    }
+
+    @Test
+    fun `verify all Audio Profiles produce distinct audible contours and specs on Bluetooth earbuds`() {
+        val freqs = com.audioeq.model.EqConstants.BAND_FREQUENCIES_31
+        val idx40 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 40.0) } ?: 3
+        val idx63 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 63.0) } ?: 5
+        val idx2000 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 2000.0) } ?: 20
+        val idx12500 = freqs.indices.minByOrNull { kotlin.math.abs(freqs[it] - 12500.0) } ?: 28
+
+        val bt = com.audioeq.model.OutputRoute.BLUETOOTH
+        val base = com.audioeq.audio.EnhancerConfig()
+
+        val dynamicSpec = com.audioeq.audio.EnhancerDsp.resolveEndpointSpec(com.audioeq.audio.AudioProfile.DYNAMIC, bt)
+        val videoSpec = com.audioeq.audio.EnhancerDsp.resolveEndpointSpec(com.audioeq.audio.AudioProfile.VIDEO, bt)
+        val musicSpec = com.audioeq.audio.EnhancerDsp.resolveEndpointSpec(com.audioeq.audio.AudioProfile.MUSIC, bt)
+        val voiceSpec = com.audioeq.audio.EnhancerDsp.resolveEndpointSpec(com.audioeq.audio.AudioProfile.VOICE, bt)
+
+        assertTrue(dynamicSpec.deEnabled && dynamicSpec.virtualizerEnabled)
+        assertTrue(videoSpec.deEnabled && videoSpec.deAmount >= 8 && videoSpec.virtualizerEnabled && videoSpec.virtualizerWidth >= 0.6f)
+        assertTrue(!musicSpec.deEnabled && !musicSpec.virtualizerEnabled && musicSpec.volmaxMakeupDb > 0.5f)
+        assertTrue(voiceSpec.deEnabled && voiceSpec.deAmount >= 10 && !voiceSpec.virtualizerEnabled)
+
+        val dynamicCfg = com.audioeq.audio.EnhancerDsp.applyProfileForRoute(base, com.audioeq.audio.AudioProfile.DYNAMIC, bt)
+        val videoCfg = com.audioeq.audio.EnhancerDsp.applyProfileForRoute(base, com.audioeq.audio.AudioProfile.VIDEO, bt)
+        val musicCfg = com.audioeq.audio.EnhancerDsp.applyProfileForRoute(base, com.audioeq.audio.AudioProfile.MUSIC, bt)
+        val voiceCfg = com.audioeq.audio.EnhancerDsp.applyProfileForRoute(
+            base.copy(subwooferEnabled = true, subwooferIntensity = 0.65f, bassEnabled = true, bassBoostDb = 4.0f),
+            com.audioeq.audio.AudioProfile.VOICE,
+            bt
+        )
+
+        assertTrue(dynamicCfg.bassEnabled && dynamicCfg.surroundEnabled && dynamicCfg.dialogueEnhancerEnabled)
+        assertTrue(videoCfg.surroundEnabled && videoCfg.surroundWidth >= 0.6f && videoCfg.dialogueAmount >= 8)
+        assertTrue(musicCfg.bassEnabled && musicCfg.bassBoostDb > 1.5f)
+        org.junit.Assert.assertFalse("Voice profile must disable subwoofer", voiceCfg.subwooferEnabled)
+        org.junit.Assert.assertFalse("Voice profile must disable bass boost", voiceCfg.bassEnabled)
+        assertTrue("Voice profile must enable strong dialogue enhancement", voiceCfg.dialogueEnhancerEnabled && voiceCfg.dialogueAmount >= 10)
+
+        val dynamicCurve = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(dynamicCfg, isSpeaker = false)
+        val videoCurve = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(videoCfg, isSpeaker = false)
+        val musicCurve = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(musicCfg, isSpeaker = false)
+        val voiceCurve = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(voiceCfg, isSpeaker = false)
+
+        assertTrue("Dynamic profile must lift 63 Hz and 2 kHz", dynamicCurve[idx63] > 3.0 && dynamicCurve[idx2000] > 3.0)
+        assertTrue("Video profile must deliver stronger dialogue presence than Music", videoCurve[idx2000] > musicCurve[idx2000] + 4.0)
+        assertTrue("Music profile must deliver bass lift and high-frequency sparkle", musicCurve[idx63] > 3.5 && musicCurve[idx12500] > 2.0)
+        assertTrue("Voice profile must cut low rumble at 40 Hz and strongly boost 2 kHz speech", voiceCurve[idx40] < -2.0 && voiceCurve[idx2000] > 8.0)
+
+        val curves = listOf(dynamicCurve, videoCurve, musicCurve, voiceCurve)
+        for (i in curves.indices) {
+            for (j in i + 1 until curves.size) {
+                val maxDiff = (0 until 31).maxOf { k -> kotlin.math.abs(curves[i][k] - curves[j][k]) }
+                assertTrue("Profiles $i and $j must be distinctly audible (maxDiff=$maxDiff)", maxDiff > 1.5)
+            }
+        }
+    }
+
+    @Test
+    fun `verify ShizukuManager init idempotency debuggable flag and empty-stdout command success`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val expectedDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+        assertEquals(expectedDebuggable, com.audioeq.shizuku.ShizukuManager.isUserServiceDebuggable(context))
+        assertTrue(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("", allowEmptyOutput = true))
+        assertTrue(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("ok", allowEmptyOutput = true))
+        org.junit.Assert.assertFalse(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("", allowEmptyOutput = false))
+        org.junit.Assert.assertFalse(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("   ", allowEmptyOutput = false))
+        org.junit.Assert.assertFalse(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("ERROR(1): denied", allowEmptyOutput = true))
+        org.junit.Assert.assertFalse(com.audioeq.shizuku.ShizukuManager.isCommandOutputSuccessful("ERROR: failed", allowEmptyOutput = false))
+
+        com.audioeq.shizuku.ShizukuManager.init(context)
+        com.audioeq.shizuku.ShizukuManager.init(context)
+        com.audioeq.shizuku.ShizukuManager.refresh()
+    }
 }

@@ -91,42 +91,54 @@ class AudioEqUnitTest {
         val dynSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.SPEAKER)
         assertTrue(dynSpk.virtualBassAuto)
         assertEquals(240, dynSpk.peakQ8)
-        assertEquals(17, dynSpk.volmaxQ4)
+        assertEquals(24, dynSpk.volmaxQ4)
+        assertEquals(5, dynSpk.deAmount)
+        assertTrue(dynSpk.virtualizerEnabled)
 
         val dynHp = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.HEADPHONES)
         assertFalse(dynHp.virtualBassAuto)
         assertEquals(256, dynHp.peakQ8)
-        assertEquals(32, dynHp.volmaxQ4)
+        assertEquals(38, dynHp.volmaxQ4)
+        assertTrue(dynHp.virtualizerEnabled)
 
         val dynBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.DYNAMIC, OutputRoute.BLUETOOTH)
         assertFalse(dynBt.virtualBassAuto)
         assertTrue(dynBt.deEnabled)
-        assertEquals(4, dynBt.deAmount)
+        assertEquals(5, dynBt.deAmount)
+        assertTrue(dynBt.virtualizerEnabled)
         assertEquals(256, dynBt.peakQ8)
-        assertEquals(32, dynBt.volmaxQ4)
+        assertEquals(38, dynBt.volmaxQ4)
 
         val vidSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.SPEAKER)
         assertTrue(vidSpk.virtualBassAuto)
-        assertEquals(5, vidSpk.deAmount)
+        assertEquals(8, vidSpk.deAmount)
         assertEquals(241, vidSpk.peakQ8)
-        assertEquals(32, vidSpk.volmaxQ4)
+        assertEquals(40, vidSpk.volmaxQ4)
+        assertTrue(vidSpk.virtualizerEnabled)
 
         val vidHp = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.HEADPHONES)
         assertFalse(vidHp.virtualBassAuto)
-        assertEquals(4, vidHp.deAmount)
+        assertEquals(8, vidHp.deAmount)
         assertEquals(256, vidHp.peakQ8)
         assertEquals(48, vidHp.volmaxQ4)
-        assertEquals(3.0f, vidHp.volmaxMakeupDb, 0.001f)
+        assertEquals(2.2f, vidHp.volmaxMakeupDb, 0.001f)
         assertTrue(vidHp.virtualizerEnabled)
 
         val vidBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.VIDEO, OutputRoute.BLUETOOTH)
         assertTrue(vidBt.deEnabled)
-        assertEquals(4, vidBt.deAmount)
+        assertEquals(8, vidBt.deAmount)
+        assertTrue(vidBt.virtualizerEnabled)
+        assertTrue(vidBt.virtualizerWidth >= 0.6f)
 
         val musSpk = EnhancerDsp.resolveEndpointSpec(AudioProfile.MUSIC, OutputRoute.SPEAKER)
         assertTrue(musSpk.virtualBassAuto)
-        assertEquals(16, musSpk.volmaxQ4)
+        assertEquals(34, musSpk.volmaxQ4)
         assertEquals(241, musSpk.peakQ8)
+
+        val voiceBt = EnhancerDsp.resolveEndpointSpec(AudioProfile.VOICE, OutputRoute.BLUETOOTH)
+        assertTrue(voiceBt.deEnabled)
+        assertEquals(11, voiceBt.deAmount)
+        assertFalse(voiceBt.virtualizerEnabled)
     }
 
     @Test
@@ -229,7 +241,7 @@ class AudioEqUnitTest {
         val lowCurve = EnhancerDsp.computeSubwooferCurve31(lowLpfCfg)
         val highCurve = EnhancerDsp.computeSubwooferCurve31(highLpfCfg)
 
-        assertTrue("40 Hz port peak must remain strong within +6.0 dB ceiling", lowCurve[3] in 4.0..6.0)
+        assertTrue("40 Hz port peak must deliver strong sub-bass lift within +10.2 dB ceiling", lowCurve[3] in 6.0..10.2)
         assertTrue("120 Hz Low-Pass Crossover must boost 80-125 Hz more than 55 Hz crossover", highCurve[6] > lowCurve[6] + 1.5)
         assertTrue("120 Hz Low-Pass Crossover must boost 100 Hz more than 55 Hz crossover", highCurve[7] > lowCurve[7] + 1.5)
     }
@@ -317,7 +329,7 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifyBassEnhancerStaysWithinSixDecibelsAndNeverSuppressesMidsOrTreble() {
+    fun verifyBassEnhancerScalesCleanlyAndNeverSuppressesMidsOrTreble() {
         val maxBassCfg = EnhancerConfig(
             bassEnabled = true,
             bassBoostDb = 6.0f,
@@ -326,8 +338,8 @@ class AudioEqUnitTest {
         )
         val bass31 = EnhancerDsp.computeBassEnhancer31(maxBassCfg)
         assertEquals(31, bass31.size)
-        assertTrue("Bass Enhancer 31-band curve must never exceed 6.0 dB", bass31.all { it in 0.0..6.0 })
-        assertTrue("Bass Enhancer at 6.0 dB must deliver full 6.0 dB punch in 31.5-63 Hz zone", bass31[3] >= 5.8 && bass31[4] >= 5.8)
+        assertTrue("Bass Enhancer 31-band curve must stay within safe bounds", bass31.all { it in -1.5..9.0 })
+        assertTrue("Bass Enhancer at 6.0 dB must deliver strong punch in 40-63 Hz zone", bass31[3] >= 6.5 && bass31[5] >= 8.0)
         for (i in 17 until 31) {
             assertTrue("Bass enhancer must not attenuate mids/treble", bass31[i] >= 0.0)
         }
@@ -478,9 +490,9 @@ class AudioEqUnitTest {
         val highVolCurve = EnhancerDsp.computeSubwooferCurve31(subCfg, volumeRatio = 0.95f)
 
         assertEquals(31, lowVolCurve.size)
-        assertTrue("20 Hz Infrasonic Excursion Guard must cut <22 Hz sub-cone energy", lowVolCurve[0] < -5.5)
-        assertTrue("40 Hz Helmholtz port resonance must stay within clean +6.0 dB ceiling", lowVolCurve[3] in 4.0..6.0)
-        assertTrue("200 Hz Trunk Isolation Carve must cut lower-midrange mud (< -2.0 dB)", lowVolCurve[10] < -2.0)
+        assertTrue("20 Hz sub-bass band must stay non-destructive on earbuds", lowVolCurve[0] in 0.0..3.5)
+        assertTrue("40 Hz Helmholtz port resonance must stay within clean +10.2 dB ceiling", lowVolCurve[3] in 6.0..10.2)
+        assertTrue("200 Hz Trunk Isolation Carve must cut lower-midrange mud (< -0.8 dB)", lowVolCurve[10] < -0.8)
         assertTrue(
             "Fletcher-Munson equal-loudness must boost 40 Hz sub-port harder at low volume",
             lowVolCurve[3] > highVolCurve[3] + 0.4
@@ -530,7 +542,7 @@ class AudioEqUnitTest {
             )
         )
         assertArrayEquals(subOnly, subWithBassEnhancer, 0.001)
-        assertTrue("Subwoofer at 125% cabinet drive must deliver strong distortion-free port slam (4.8..6.0 dB)", subOnly[3] in 4.8..6.0)
+        assertTrue("Subwoofer at 125% cabinet drive must deliver strong port slam (7.5..10.2 dB)", subOnly[3] in 7.5..10.2)
 
         val subWithDeepBass = EnhancerDsp.computeCombinedEnhancer31(
             config = EnhancerConfig(

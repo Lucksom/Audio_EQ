@@ -97,7 +97,7 @@ data class EnhancerConfig(
     val subwooferIntensity: Float = 0.0f,
     val subwooferSubOctaveMix: Float = 0.0f,
     val subwooferAutoLoudness: Boolean = true,
-    val subwooferCrossoverHz: Float = 58.0f
+    val subwooferCrossoverHz: Float = 80.0f
 ) {
     fun isAnyActive(): Boolean {
         return profile != AudioProfile.OFF ||
@@ -162,16 +162,16 @@ object EnhancerDsp {
                         profile = profile,
                         route = route,
                         endpointName = endpointName,
-                        deEnabled = false,
-                        deAmount = 4,
+                        deEnabled = true,
+                        deAmount = 5,
                         virtualBassAuto = true,
                         peakQ8 = 240,
                         peakCeilingDb = -1.0f,
-                        volmaxQ4 = 17,
-                        volmaxMakeupDb = 0.0f,
+                        volmaxQ4 = 24,
+                        volmaxMakeupDb = 0.8f,
                         virtualizerEnabled = true,
                         virtualizerModeLabel = "Adaptive Speaker Stage",
-                        virtualizerWidth = 0.40f,
+                        virtualizerWidth = 0.45f,
                         deepBassActive = deepBassActive
                     )
                     isBluetooth -> EndpointProfileSpec(
@@ -179,28 +179,28 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 4,
+                        deAmount = 5,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
-                        virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (A2DP Phase Coherence)",
-                        virtualizerWidth = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 38,
+                        volmaxMakeupDb = 1.0f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Adaptive Binaural Stage (Bluetooth)",
+                        virtualizerWidth = 0.40f,
                         deepBassActive = deepBassActive
                     )
                     else -> EndpointProfileSpec(
                         profile = profile,
                         route = route,
                         endpointName = endpointName,
-                        deEnabled = false,
-                        deAmount = 4,
+                        deEnabled = true,
+                        deAmount = 5,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 38,
+                        volmaxMakeupDb = 1.0f,
                         virtualizerEnabled = true,
                         virtualizerModeLabel = "Adaptive Binaural Stage (1.0·Movie + 0.35·Music)",
                         virtualizerWidth = 0.50f,
@@ -216,15 +216,15 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 5,
+                        deAmount = 8,
                         virtualBassAuto = true,
                         peakQ8 = 241,
                         peakCeilingDb = -1.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.5f,
+                        volmaxQ4 = 40,
+                        volmaxMakeupDb = 1.2f,
                         virtualizerEnabled = true,
                         virtualizerModeLabel = "Cinema Wide Crosstalk Canceller",
-                        virtualizerWidth = 0.65f,
+                        virtualizerWidth = 0.68f,
                         deepBassActive = deepBassActive
                     )
                     isBluetooth -> EndpointProfileSpec(
@@ -232,15 +232,15 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 4,
+                        deAmount = 8,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
-                        virtualizerEnabled = false,
-                        virtualizerModeLabel = "Zero-Latency A2DP Cinema Direct",
-                        virtualizerWidth = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 44,
+                        volmaxMakeupDb = 1.8f,
+                        virtualizerEnabled = true,
+                        virtualizerModeLabel = "Cinema 3D Binaural (Bluetooth)",
+                        virtualizerWidth = 0.65f,
                         deepBassActive = deepBassActive
                     )
                     else -> EndpointProfileSpec(
@@ -248,12 +248,12 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 4,
+                        deAmount = 8,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
+                        peakCeilingDb = -0.2f,
                         volmaxQ4 = 48,
-                        volmaxMakeupDb = 3.0f,
+                        volmaxMakeupDb = 2.2f,
                         virtualizerEnabled = true,
                         virtualizerModeLabel = "Mode 2 Binaural HRTF (±35°, τ=0.302 ms / 14 samples)",
                         virtualizerWidth = 0.72f,
@@ -273,10 +273,10 @@ object EnhancerDsp {
                         virtualBassAuto = true,
                         peakQ8 = 241,
                         peakCeilingDb = -1.0f,
-                        volmaxQ4 = 16,
-                        volmaxMakeupDb = 0.0f,
+                        volmaxQ4 = 34,
+                        volmaxMakeupDb = 0.6f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (Pure Stereo Reference)",
+                        virtualizerModeLabel = "Hi-Fi Stereo Reference (Speaker)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -288,11 +288,11 @@ object EnhancerDsp {
                         deAmount = 0,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 36,
+                        volmaxMakeupDb = 0.8f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (Pure Stereo Reference)",
+                        virtualizerModeLabel = "Hi-Fi Direct Stereo (Bluetooth)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -305,10 +305,10 @@ object EnhancerDsp {
                         virtualizerEnabled = false,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
-                        virtualizerModeLabel = "Direct GEQ Acoustic Path",
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 36,
+                        volmaxMakeupDb = 0.8f,
+                        virtualizerModeLabel = "Direct Hi-Fi Stereo Path",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -322,14 +322,14 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 9,
-                        virtualBassAuto = true,
+                        deAmount = 11,
+                        virtualBassAuto = false,
                         peakQ8 = 241,
                         peakCeilingDb = -1.0f,
                         volmaxQ4 = 48,
-                        volmaxMakeupDb = 3.0f,
+                        volmaxMakeupDb = 2.0f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (Center-Channel Vocal Focus)",
+                        virtualizerModeLabel = "Center-Channel Vocal Focus",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -337,15 +337,15 @@ object EnhancerDsp {
                         profile = profile,
                         route = route,
                         endpointName = endpointName,
-                        deEnabled = false,
-                        deAmount = 0,
+                        deEnabled = true,
+                        deAmount = 11,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 44,
+                        volmaxMakeupDb = 1.5f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (Direct BT Speech)",
+                        virtualizerModeLabel = "Vocal Clarity Focus (Bluetooth)",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -354,14 +354,14 @@ object EnhancerDsp {
                         route = route,
                         endpointName = endpointName,
                         deEnabled = true,
-                        deAmount = 7,
+                        deAmount = 10,
                         virtualBassAuto = false,
                         peakQ8 = 256,
-                        peakCeilingDb = 0.0f,
-                        volmaxQ4 = 32,
-                        volmaxMakeupDb = 0.0f,
+                        peakCeilingDb = -0.2f,
+                        volmaxQ4 = 44,
+                        volmaxMakeupDb = 1.5f,
                         virtualizerEnabled = false,
-                        virtualizerModeLabel = "Bypassed (Zero Phase Smearing)",
+                        virtualizerModeLabel = "Zero-Phase Vocal Clarity",
                         virtualizerWidth = 0.0f,
                         deepBassActive = deepBassActive
                     )
@@ -376,7 +376,7 @@ object EnhancerDsp {
                 deAmount = 0,
                 virtualBassAuto = isSpeaker,
                 peakQ8 = if (isSpeaker) 240 else 256,
-                peakCeilingDb = if (isSpeaker) -1.0f else 0.0f,
+                peakCeilingDb = if (isSpeaker) -1.0f else -0.2f,
                 volmaxQ4 = 32,
                 volmaxMakeupDb = 0.0f,
                 virtualizerEnabled = false,
@@ -396,30 +396,36 @@ object EnhancerDsp {
             return current.copy(profile = AudioProfile.OFF)
         }
         val spec = resolveEndpointSpec(profile, route, current.deepBassEnabled)
+        val disableBassAndSub = profile == AudioProfile.VOICE
+        val keepSub = current.subwooferEnabled && !disableBassAndSub
+        val targetBassDb = when (profile) {
+            AudioProfile.DYNAMIC -> 2.4f
+            AudioProfile.VIDEO -> 3.0f
+            AudioProfile.MUSIC -> 2.2f
+            AudioProfile.VOICE -> 0.0f
+            AudioProfile.OFF -> current.bassBoostDb
+        }
+        val targetBassOn = !disableBassAndSub && !keepSub && targetBassDb > 0.05f
+        val targetVirtualBassStrength = when {
+            !spec.virtualBassAuto -> 0.0f
+            profile == AudioProfile.VIDEO -> 0.40f
+            profile == AudioProfile.DYNAMIC -> 0.35f
+            profile == AudioProfile.MUSIC -> 0.30f
+            else -> 0.0f
+        }
         return current.copy(
             profile = profile,
-            deepBassEnabled = current.deepBassEnabled,
-            bassEnabled = if (current.subwooferEnabled) false else bassEnabledKeepOrDefault(current, profile),
-            bassBoostDb = when {
-                profile == AudioProfile.VIDEO && current.bassBoostDb < 0.2f -> 0.9f
-                profile == AudioProfile.DYNAMIC && current.bassBoostDb < 0.2f -> 0.8f
-                else -> current.bassBoostDb
-            },
-            virtualBassEnabled = spec.virtualBassAuto,
-            virtualBassStrength = if (spec.virtualBassAuto && current.virtualBassStrength < 0.05f) 0.15f else current.virtualBassStrength,
+            deepBassEnabled = if (disableBassAndSub) false else current.deepBassEnabled,
+            subwooferEnabled = keepSub,
+            bassEnabled = targetBassOn,
+            bassBoostDb = if (targetBassOn) targetBassDb else if (disableBassAndSub) 0.0f else current.bassBoostDb,
+            virtualBassEnabled = spec.virtualBassAuto && targetVirtualBassStrength > 0.02f,
+            virtualBassStrength = targetVirtualBassStrength,
             dialogueEnhancerEnabled = spec.deEnabled,
-            dialogueAmount = if (spec.deEnabled && current.dialogueAmount <= 0) 2 else current.dialogueAmount,
+            dialogueAmount = if (spec.deEnabled) spec.deAmount else 0,
             surroundEnabled = spec.virtualizerEnabled,
-            surroundWidth = if (spec.virtualizerEnabled && current.surroundWidth < 0.05f) 0.15f else current.surroundWidth
+            surroundWidth = if (spec.virtualizerEnabled) spec.virtualizerWidth else 0.0f
         )
-    }
-
-    private fun bassEnabledKeepOrDefault(current: EnhancerConfig, profile: AudioProfile): Boolean {
-        return when (profile) {
-            AudioProfile.VIDEO, AudioProfile.DYNAMIC -> true
-            AudioProfile.VOICE -> false
-            else -> current.bassEnabled
-        }
     }
 
     fun interpolate10To20Logarithmic(gains10: DoubleArray, deepBass: Boolean = false): DoubleArray {
@@ -623,26 +629,19 @@ object EnhancerDsp {
         val result = DoubleArray(31)
         if (!config.bassEnabled || config.bassBoostDb <= 0.05f) return result
 
-        val rawBoost = config.bassBoostDb.toDouble().coerceIn(0.0, 6.0)
-        val norm = rawBoost / 6.0
-        val boost = (6.0 * norm.pow(1.25)).coerceIn(0.0, 6.0)
+        val boost = config.bassBoostDb.toDouble().coerceIn(0.0, 6.0)
         val freqs = EqConstants.BAND_FREQUENCIES_31
 
         for (i in 0 until 31) {
             val f = freqs[i]
-            val ratio = f / 85.0
-            val shelfGain = (boost * 0.85) / sqrt(1.0 + ratio.pow(4.0))
+            val shelfGain = (boost * 1.15) / sqrt(1.0 + (f / 110.0).pow(4.0))
+            val kickPunchBell = (boost * 0.45) * exp(-0.5 * (ln(f / 63.0) / 0.42).pow(2.0))
+            val upperBassBody = (boost * 0.28) * exp(-0.5 * (ln(f / 100.0) / 0.34).pow(2.0))
+            val mudRelief = -(boost * 0.14) * exp(-0.5 * (ln(f / 250.0) / 0.30).pow(2.0))
+            val beaterSnap = (boost * 0.10) * exp(-0.5 * (ln(f / 2800.0) / 0.28).pow(2.0))
 
-            val logDist55 = ln(f / 55.0)
-            val punchBell = (boost * 0.42) * exp(-0.5 * (logDist55 / 0.36).pow(2.0))
-
-            val logDist82 = ln(f / 82.0)
-            val upperPunchBell = (boost * 0.26) * exp(-0.5 * (logDist82 / 0.30).pow(2.0))
-
-            val logDist2500 = ln(f / 2500.0)
-            val beaterClickBell = (boost * 0.18) * exp(-0.5 * (logDist2500 / 0.28).pow(2.0))
-
-            result[i] = (shelfGain + punchBell + upperPunchBell + beaterClickBell).coerceIn(0.0, boost)
+            result[i] = (shelfGain + kickPunchBell + upperBassBody + mudRelief + beaterSnap)
+                .coerceIn(-1.5, boost * 1.50)
         }
         return result
     }
@@ -655,29 +654,29 @@ object EnhancerDsp {
         if (!config.subwooferEnabled || config.subwooferIntensity <= 0.02f) return result
 
         val rawInt = config.subwooferIntensity.coerceIn(0.0f, 1.5f).toDouble()
-        val wInt = (rawInt / 1.0).pow(1.12) * 1.0
+        val wInt = rawInt.pow(0.92)
         val loudnessComp = if (config.subwooferAutoLoudness) {
-            1.0 + 0.22 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
+            1.0 + 0.25 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
         } else {
             1.0
         }
-        val subOctScale = 0.88 + 0.25 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
-        val eff = (wInt * loudnessComp).coerceAtMost(1.45)
+        val subOctScale = 1.0 + 0.55 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
+        val eff = (wInt * loudnessComp).coerceAtMost(1.55)
         val crossoverHz = config.subwooferCrossoverHz.coerceIn(55f, 120f).toDouble()
         val crossoverScale = ((crossoverHz - 55.0) / 65.0).coerceIn(0.0, 1.0)
 
-        result[0] = (-6.0 * rawInt).coerceIn(-9.0, 0.0)
-        result[1] = (1.6 * eff * subOctScale).coerceIn(0.0, 3.6)
-        result[2] = (3.4 * eff * subOctScale).coerceIn(0.0, 5.5)
-        result[3] = (4.1 * eff * subOctScale).coerceIn(0.0, 6.0)
-        result[4] = (3.4 * eff).coerceIn(0.0, 5.4)
-        result[5] = (2.2 * eff * (0.95 + 0.35 * crossoverScale)).coerceIn(0.0, 4.6)
-        result[6] = (1.0 * eff + 1.8 * eff * crossoverScale).coerceIn(0.0, 3.8)
-        result[7] = (1.6 * eff * crossoverScale).coerceIn(0.0, 2.8)
-        result[8] = (0.9 * eff * crossoverScale).coerceIn(0.0, 1.8)
-        result[9] = (-1.6 * rawInt * (1.0 - 0.35 * crossoverScale)).coerceIn(-3.0, 0.0)
-        result[10] = (-2.6 * rawInt).coerceIn(-4.5, 0.0)
-        result[11] = (-1.4 * rawInt).coerceIn(-2.5, 0.0)
+        result[0] = (1.2 * eff * subOctScale).coerceIn(0.0, 3.5)
+        result[1] = (3.6 * eff * subOctScale).coerceIn(0.0, 7.0)
+        result[2] = (5.6 * eff * subOctScale).coerceIn(0.0, 9.2)
+        result[3] = (6.8 * eff * subOctScale).coerceIn(0.0, 10.2)
+        result[4] = (6.4 * eff * (0.95 + 0.15 * subOctScale)).coerceIn(0.0, 9.8)
+        result[5] = (5.4 * eff * (0.92 + 0.28 * crossoverScale)).coerceIn(0.0, 8.8)
+        result[6] = (3.8 * eff * (0.75 + 0.55 * crossoverScale)).coerceIn(0.0, 7.5)
+        result[7] = (2.0 * eff * (0.45 + 0.85 * crossoverScale)).coerceIn(0.0, 5.5)
+        result[8] = (0.9 * eff * (0.20 + 0.90 * crossoverScale)).coerceIn(0.0, 3.2)
+        result[9] = (-0.6 * rawInt * (1.0 - 0.5 * crossoverScale)).coerceIn(-1.2, 0.0)
+        result[10] = (-1.2 * rawInt).coerceIn(-2.0, 0.0)
+        result[11] = (-0.7 * rawInt).coerceIn(-1.2, 0.0)
 
         return result
     }
@@ -811,6 +810,65 @@ object EnhancerDsp {
         return result
     }
 
+    fun computeProfileCurve31(
+        config: EnhancerConfig,
+        isSpeaker: Boolean = false
+    ): DoubleArray {
+        val result = DoubleArray(31)
+        if (config.profile == AudioProfile.OFF) return result
+
+        val freqs = EqConstants.BAND_FREQUENCIES_31
+        val spkScale = if (isSpeaker) 0.85 else 1.0
+
+        when (config.profile) {
+            AudioProfile.DYNAMIC -> {
+                for (i in 0 until 31) {
+                    val f = freqs[i]
+                    val bassLift = (2.4 * spkScale) * exp(-0.5 * (ln(f / 62.0) / 0.55).pow(2.0))
+                    val mudDip = -1.0 * exp(-0.5 * (ln(f / 240.0) / 0.36).pow(2.0))
+                    val vocalFocus = 1.6 * exp(-0.5 * (ln(f / 2400.0) / 0.52).pow(2.0))
+                    val airLift = 2.2 / sqrt(1.0 + (8500.0 / f).pow(4.0))
+                    result[i] = (bassLift + mudDip + vocalFocus + airLift).coerceIn(-4.0, 5.0)
+                }
+            }
+            AudioProfile.VIDEO -> {
+                for (i in 0 until 31) {
+                    val f = freqs[i]
+                    val cinemaSub = (3.2 * spkScale) * exp(-0.5 * (ln(f / 48.0) / 0.50).pow(2.0))
+                    val lowMidClean = -1.8 * exp(-0.5 * (ln(f / 210.0) / 0.38).pow(2.0))
+                    val centerDialogue = 2.8 * exp(-0.5 * (ln(f / 2000.0) / 0.48).pow(2.0))
+                    val stageAir = 2.0 / sqrt(1.0 + (7500.0 / f).pow(4.0))
+                    result[i] = (cinemaSub + lowMidClean + centerDialogue + stageAir).coerceIn(-4.0, 5.5)
+                }
+            }
+            AudioProfile.MUSIC -> {
+                for (i in 0 until 31) {
+                    val f = freqs[i]
+                    val lowWeight = (2.6 * spkScale) * exp(-0.5 * (ln(f / 68.0) / 0.52).pow(2.0))
+                    val warmBody = 1.0 * exp(-0.5 * (ln(f / 135.0) / 0.35).pow(2.0))
+                    val midClarity = -0.7 * exp(-0.5 * (ln(f / 340.0) / 0.32).pow(2.0))
+                    val sparkle = 2.5 / sqrt(1.0 + (6800.0 / f).pow(4.0))
+                    result[i] = (lowWeight + warmBody + midClarity + sparkle).coerceIn(-3.0, 5.0)
+                }
+            }
+            AudioProfile.VOICE -> {
+                for (i in 0 until 31) {
+                    val f = freqs[i]
+                    val rumbleCut = -3.8 / sqrt(1.0 + (f / 115.0).pow(4.0))
+                    val mudCut = -2.2 * exp(-0.5 * (ln(f / 220.0) / 0.38).pow(2.0))
+                    val vocalBody = 1.5 * exp(-0.5 * (ln(f / 600.0) / 0.34).pow(2.0))
+                    val speechFormant = 3.8 * exp(-0.5 * (ln(f / 2100.0) / 0.50).pow(2.0))
+                    val consonantCrisp = 1.8 * exp(-0.5 * (ln(f / 4500.0) / 0.30).pow(2.0))
+                    val hissTame = -1.4 / sqrt(1.0 + (10500.0 / f).pow(4.0))
+                    result[i] = (rumbleCut + mudCut + vocalBody + speechFormant + consonantCrisp + hissTame)
+                        .coerceIn(-6.0, 6.0)
+                }
+            }
+            AudioProfile.OFF -> Unit
+        }
+        return result
+    }
+
     fun computeCombinedEnhancer31(
         config: EnhancerConfig,
         isSpeaker: Boolean = false,
@@ -824,12 +882,12 @@ object EnhancerDsp {
         val deepBass = computeDeepBassCurve31(config, sampleRate, userBand0Db, userBand1Db)
         val bass = if (subActive) DoubleArray(31) else computeBassEnhancer31(config)
         val virtBass = computeVirtualBass31(config)
-        val dynSteer = computeDynamicProfileSteering31(config)
+        val profileCurve = computeProfileCurve31(config, isSpeaker)
         val de = computeDialogueEnhancer31(config)
         val surr = computeSurroundContour31(config, isSpeaker, sampleRate)
 
         return DoubleArray(31) { i ->
-            (subwoofer[i] + deepBass[i] + bass[i] + virtBass[i] + dynSteer[i] + de[i] + surr[i])
+            (subwoofer[i] + deepBass[i] + bass[i] + virtBass[i] + profileCurve[i] + de[i] + surr[i])
                 .coerceIn(-15.0, 15.0)
         }
     }

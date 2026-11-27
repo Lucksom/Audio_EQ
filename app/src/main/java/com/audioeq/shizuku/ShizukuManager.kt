@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.IBinder
@@ -17,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import rikka.shizuku.Shizuku
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class ShizukuState {
     NOT_INSTALLED,
@@ -47,7 +49,12 @@ object ShizukuManager {
     private var workingSuBinary: String? = null
 
     @Volatile
-    private var dumpGrantAttempted: Boolean = false
+    private var permissionGrantedByCallback: Boolean = false
+
+    @Volatile
+    private var lastDumpGrantAttemptMs: Long = 0L
+
+    private val listenersRegistered = AtomicBoolean(false)
 
     @Volatile
     private var onStateChangedListener: ((ShizukuState) -> Unit)? = null
@@ -77,11 +84,27 @@ object ShizukuManager {
     fun isRootAvailable(): Boolean = rootAccessVerified || isShizukuRunningAsRoot()
 
     fun isShizukuRunningAsRoot(): Boolean = try {
-        Shizuku.pingBinder() &&
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED &&
-            Shizuku.getUid() == 0
+        val permGranted = Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED ||
+            permissionGrantedByCallback
+        Shizuku.pingBinder() && permGranted && Shizuku.getUid() == 0
     } catch (_: Throwable) {
         false
+    }
+
+    fun hasDumpPermission(context: Context? = appContext): Boolean {
+        val ctx = context ?: return false
+        return runCatching {
+            ctx.checkSelfPermission(android.Manifest.permission.DUMP) == PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+    }
+
+    internal fun isUserServiceDebuggable(context: Context): Boolean {
+        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+
+    internal fun isCommandOutputSuccessful(output: String, allowEmptyOutput: Boolean): Boolean {
+        if (output.startsWith("ERROR")) return false
+        return allowEmptyOutput || output.isNotBlank()
     }
 
     fun verifyRootAccess(timeoutMs: Long = 10_000L): Boolean {
@@ -438,7 +461,8 @@ object ShizukuManager {
 
     private val onBinderDead = Shizuku.OnBinderDeadListener {
         service = null
-        dumpGrantAttempted = false
+        permissionGrantedByCallback = false
+        lastDumpGrantAttemptMs = 0L
         refresh()
     }
 
@@ -446,14 +470,20 @@ object ShizukuManager {
         Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
             if (requestCode == REQUEST_CODE) {
                 if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                    dumpGrantAttempted = false
+                    permissionGrantedByCallback = true
+                    lastDumpGrantAttemptMs = 0L
                     if (isShizukuRunningAsRoot()) {
                         rootAccessVerified = true
+                        persistRootHint(true)
                     }
-                    refresh()
-                    tryGrantDumpPermissionAsync()
+                    _state.value = ShizukuState.READY
+                    _privilegeSummary.value = privilege()
+                    bind()
+                    tryGrantDumpPermissionAsync(force = true)
                     onStateChangedListener?.invoke(ShizukuState.READY)
+                    refresh()
                 } else {
+                    permissionGrantedByCallback = false
                     val deniedPerm = runCatching {
                         Shizuku.shouldShowRequestPermissionRationale()
                     }.getOrDefault(false)
@@ -466,19 +496,23 @@ object ShizukuManager {
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        runCatching {
-            Shizuku.addBinderReceivedListenerSticky(onBinderReceived)
-            Shizuku.addBinderDeadListener(onBinderDead)
-            Shizuku.addRequestPermissionResultListener(onPermissionResult)
+        if (listenersRegistered.compareAndSet(false, true)) {
+            runCatching {
+                Shizuku.addBinderReceivedListenerSticky(onBinderReceived)
+                Shizuku.addBinderDeadListener(onBinderDead)
+                Shizuku.addRequestPermissionResultListener(onPermissionResult)
+            }
         }
         refresh()
     }
 
     fun release() {
-        runCatching {
-            Shizuku.removeBinderReceivedListener(onBinderReceived)
-            Shizuku.removeBinderDeadListener(onBinderDead)
-            Shizuku.removeRequestPermissionResultListener(onPermissionResult)
+        if (listenersRegistered.compareAndSet(true, false)) {
+            runCatching {
+                Shizuku.removeBinderReceivedListener(onBinderReceived)
+                Shizuku.removeBinderDeadListener(onBinderDead)
+                Shizuku.removeRequestPermissionResultListener(onPermissionResult)
+            }
         }
     }
 
@@ -499,10 +533,16 @@ object ShizukuManager {
         val prevPriv = _privilegeSummary.value
         val newState = try {
             when {
-                !Shizuku.pingBinder() ->
+                !Shizuku.pingBinder() -> {
+                    permissionGrantedByCallback = false
                     if (isShizukuAppInstalled()) ShizukuState.NOT_RUNNING else ShizukuState.NOT_INSTALLED
+                }
                 Shizuku.isPreV11() || Shizuku.getVersion() < 11 -> ShizukuState.UNSUPPORTED_VERSION
-                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> ShizukuState.READY
+                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> {
+                    permissionGrantedByCallback = true
+                    ShizukuState.READY
+                }
+                permissionGrantedByCallback -> ShizukuState.READY
                 Shizuku.shouldShowRequestPermissionRationale() -> ShizukuState.DENIED_PERMANENTLY
                 else -> ShizukuState.NEEDS_PERMISSION
             }
@@ -518,8 +558,8 @@ object ShizukuManager {
         _privilegeSummary.value = newPriv
         if (newState == ShizukuState.READY) {
             if (service == null) bind()
-            if (!dumpGrantAttempted) {
-                tryGrantDumpPermissionAsync()
+            if (!hasDumpPermission()) {
+                tryGrantDumpPermissionAsync(force = false)
             }
         }
         if (prevState != newState || prevPriv != newPriv) {
@@ -528,18 +568,27 @@ object ShizukuManager {
     }
 
     fun privilege(): String = try {
-        val shizukuReady = Shizuku.pingBinder() &&
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        val binderAlive = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+        val shizukuPerm = binderAlive && (
+            runCatching { Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED }.getOrDefault(false) ||
+                permissionGrantedByCallback
+            )
+        val shizukuUid = if (shizukuPerm) runCatching { Shizuku.getUid() }.getOrDefault(2000) else -1
         when {
-            shizukuReady && Shizuku.getUid() == 0 -> "Shizuku Root (su uid=0)"
+            shizukuPerm && shizukuUid == 0 -> "Shizuku Root (su uid=0)"
             rootAccessVerified -> "Root (su uid=0)"
-            shizukuReady -> "Shizuku Shell (adb uid=2000)"
-            Shizuku.pingBinder() -> "Permission needed"
+            shizukuPerm -> "Shizuku Shell (adb uid=$shizukuUid)"
+            hasDumpPermission() -> "ADB Shell (DUMP granted)"
+            binderAlive -> "Permission needed"
             isShizukuAppInstalled() -> "Shizuku stopped"
             else -> "none"
         }
     } catch (_: Throwable) {
-        if (rootAccessVerified) "Root (su uid=0)" else "none"
+        when {
+            rootAccessVerified -> "Root (su uid=0)"
+            hasDumpPermission() -> "ADB Shell (DUMP granted)"
+            else -> "none"
+        }
     }
 
     fun requestPermission() {
@@ -560,7 +609,7 @@ object ShizukuManager {
                 ShizukuState.NOT_INSTALLED -> openShizukuDownloadPage()
                 ShizukuState.READY -> {
                     if (service == null) bind()
-                    tryGrantDumpPermissionAsync()
+                    tryGrantDumpPermissionAsync(force = true)
                     _privilegeSummary.value = privilege()
                     onStateChangedListener?.invoke(ShizukuState.READY)
                 }
@@ -573,7 +622,7 @@ object ShizukuManager {
         refresh()
         if (_state.value == ShizukuState.READY) {
             if (service == null) bind()
-            tryGrantDumpPermissionAsync()
+            tryGrantDumpPermissionAsync(force = !hasDumpPermission())
             _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(ShizukuState.READY)
         } else if (rootAccessVerified) {
@@ -581,19 +630,25 @@ object ShizukuManager {
         }
     }
 
-    private fun tryGrantDumpPermissionAsync() {
+    private fun tryGrantDumpPermissionAsync(force: Boolean = false) {
         val ctx = appContext ?: return
         if (_state.value != ShizukuState.READY) return
-        dumpGrantAttempted = true
+        if (!force && hasDumpPermission(ctx)) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastDumpGrantAttemptMs < 4000L) return
+        lastDumpGrantAttemptMs = now
         Thread {
             runCatching {
                 val pkg = ctx.packageName
-                execIfBound("pm grant $pkg android.permission.DUMP")
-                execIfBound("pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
+                execIfBound("pm grant $pkg android.permission.DUMP 2>&1 && echo ok", allowEmptyOutput = true)
+                execIfBound("pm grant $pkg android.permission.PACKAGE_USAGE_STATS 2>&1; appops set $pkg GET_USAGE_STATS allow 2>&1; echo ok", allowEmptyOutput = true)
                 _privilegeSummary.value = privilege()
                 onStateChangedListener?.invoke(_state.value)
             }
-        }.start()
+        }.apply {
+            isDaemon = true
+            start()
+        }
     }
 
     private fun grantDumpViaSuAsync() {
@@ -635,6 +690,9 @@ object ShizukuManager {
             val s = IUserService.Stub.asInterface(binder)
             service = s
             pending?.complete(s)
+            if (!hasDumpPermission()) {
+                tryGrantDumpPermissionAsync(force = true)
+            }
             _privilegeSummary.value = privilege()
             onStateChangedListener?.invoke(_state.value)
         }
@@ -649,11 +707,13 @@ object ShizukuManager {
         val ctx = appContext ?: return null
         val pm = ctx.packageManager
         val pkg = ctx.packageName
-        val version = PackageInfoCompat.getLongVersionCode(pm.getPackageInfo(pkg, 0)).toInt()
+        val version = runCatching {
+            PackageInfoCompat.getLongVersionCode(pm.getPackageInfo(pkg, 0)).toInt()
+        }.getOrDefault(1)
         return Shizuku.UserServiceArgs(ComponentName(pkg, ShizukuUserService::class.java.name))
             .daemon(false)
             .processNameSuffix("shell")
-            .debuggable(false)
+            .debuggable(isUserServiceDebuggable(ctx))
             .version(version)
     }
 
@@ -669,7 +729,7 @@ object ShizukuManager {
         service = null
     }
 
-    private fun execViaShizukuNewProcess(command: String): String? {
+    private fun execViaShizukuNewProcess(command: String, allowEmptyOutput: Boolean = false): String? {
         if (_state.value != ShizukuState.READY) return null
         return try {
             val method = Shizuku::class.java.getDeclaredMethod(
@@ -683,8 +743,8 @@ object ShizukuManager {
                 ?: return null
             runCatching { proc.outputStream.close() }
             val out = proc.inputStream.bufferedReader().use { it.readText() }
-            val finished = proc.waitFor(2000, TimeUnit.MILLISECONDS)
-            if (finished && proc.exitValue() == 0) out else null
+            val finished = proc.waitFor(2500, TimeUnit.MILLISECONDS)
+            if (finished && proc.exitValue() == 0 && isCommandOutputSuccessful(out, allowEmptyOutput)) out else null
         } catch (_: Throwable) {
             null
         }
@@ -692,7 +752,7 @@ object ShizukuManager {
 
     suspend fun exec(command: String): Result<String> = runCatching {
         check(_state.value == ShizukuState.READY) { "Shizuku is not ready: ${_state.value}" }
-        val direct = withContext(Dispatchers.IO) { execIfBound(command) }
+        val direct = withContext(Dispatchers.IO) { execIfBound(command, allowEmptyOutput = true) }
         if (direct != null) return@runCatching direct
         val s = service ?: CompletableDeferred<IUserService>().let { d ->
             pending = d
@@ -706,13 +766,13 @@ object ShizukuManager {
         out
     }
 
-    fun execIfBound(command: String): String? {
+    fun execIfBound(command: String, allowEmptyOutput: Boolean = false): String? {
         if (_state.value != ShizukuState.READY) return null
         var s = service
         if (s == null) {
             bind()
             var waited = 0
-            while (service == null && waited < 1200) {
+            while (service == null && waited < 2000) {
                 try {
                     Thread.sleep(50)
                 } catch (_: InterruptedException) {
@@ -725,12 +785,12 @@ object ShizukuManager {
         if (s != null) {
             try {
                 val out = s.exec(command)
-                if (!out.startsWith("ERROR") && out.isNotBlank()) {
+                if (isCommandOutputSuccessful(out, allowEmptyOutput)) {
                     return out
                 }
             } catch (_: Throwable) {
             }
         }
-        return execViaShizukuNewProcess(command)
+        return execViaShizukuNewProcess(command, allowEmptyOutput)
     }
 }

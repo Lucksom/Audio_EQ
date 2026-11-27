@@ -550,37 +550,16 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             engineController.triggerImmediateSessionSync()
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             var previousShizukuState = shizukuManager.state.value
             if (previousShizukuState == ShizukuState.READY) {
                 shizukuManager.ensureBoundAndGrantPermissions()
             }
             shizukuManager.state.collect { newState ->
-                if (newState == ShizukuState.READY && previousShizukuState != ShizukuState.READY) {
-                    val currentMode = repository.engineMode.value
-                    val desired = pendingDesiredMode
-                    val shouldUpdateMode = desired != null || currentMode != EngineMode.LEGACY
-                    if (shouldUpdateMode) {
-                        val wantRoot = desired == EngineMode.ROOT ||
-                            currentMode == EngineMode.ROOT ||
-                            shizukuManager.isShizukuRunningAsRoot()
-                        if (wantRoot && shizukuManager.verifyRootAccess(timeoutMs = 5000L)) {
-                            pendingDesiredMode = null
-                            repository.setEngineMode(EngineMode.ROOT)
-                            shizukuManager.ensureBoundAndGrantPermissions()
-                            engineController.triggerImmediateSessionSync()
-                            _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) applied — Root engine active"
-                        } else {
-                            pendingDesiredMode = null
-                            repository.setEngineMode(EngineMode.ADB_SHIZUKU)
-                            shizukuManager.ensureBoundAndGrantPermissions()
-                            engineController.triggerImmediateSessionSync()
-                            _statusBanner.value = "Shizuku permission applied — ${shizukuManager.privilege()} active"
-                        }
-                    } else {
-                        shizukuManager.ensureBoundAndGrantPermissions()
-                        engineController.triggerImmediateSessionSync()
-                    }
+                val transitionToReady = newState == ShizukuState.READY &&
+                    (previousShizukuState != ShizukuState.READY || pendingDesiredMode != null)
+                if (transitionToReady) {
+                    applyShizukuReadyState()
                 }
                 previousShizukuState = newState
             }
@@ -1072,7 +1051,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBassEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextDb = if (enabled && cur.bassBoostDb < 0.1f) 0.8f else cur.bassBoostDb
+            val nextDb = if (enabled && cur.bassBoostDb < 0.1f) 3.0f else cur.bassBoostDb
             cur.copy(
                 bassEnabled = enabled,
                 bassBoostDb = nextDb,
@@ -1139,8 +1118,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSubwooferEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
-            val nextIntensity = if (enabled && cur.subwooferIntensity < 0.02f) 0.20f else cur.subwooferIntensity
-            val nextSubOct = if (enabled && cur.subwooferSubOctaveMix < 0.01f) 0.08f else cur.subwooferSubOctaveMix
+            val nextIntensity = if (enabled && cur.subwooferIntensity < 0.02f) 0.65f else cur.subwooferIntensity
+            val nextSubOct = if (enabled && cur.subwooferSubOctaveMix < 0.01f) 0.25f else cur.subwooferSubOctaveMix
             cur.copy(
                 subwooferEnabled = enabled,
                 subwooferIntensity = nextIntensity,
@@ -1298,9 +1277,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 shizukuManager.refreshStatus()
                 when (shizukuManager.state.value) {
                     ShizukuState.READY -> {
-                        shizukuManager.ensureBoundAndGrantPermissions()
-                        engineController.triggerImmediateSessionSync()
-                        _statusBanner.value = "ADB / Shizuku applied — ${shizukuManager.privilege()} active"
+                        pendingDesiredMode = null
+                        viewModelScope.launch(Dispatchers.IO) {
+                            shizukuManager.ensureBoundAndGrantPermissions()
+                            engineController.triggerImmediateSessionSync()
+                            _statusBanner.value = "ADB / Shizuku applied — ${shizukuManager.privilege()} active"
+                        }
                     }
                     ShizukuState.NEEDS_PERMISSION,
                     ShizukuState.DENIED_PERMANENTLY -> {
@@ -1327,6 +1309,33 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 engineController.triggerImmediateSessionSync()
                 _statusBanner.value = "Legacy mode active"
             }
+        }
+    }
+
+    private fun applyShizukuReadyState() {
+        val currentMode = repository.engineMode.value
+        val desired = pendingDesiredMode
+        val shouldUpdateMode = desired != null || currentMode != EngineMode.LEGACY
+        if (shouldUpdateMode) {
+            val wantRoot = desired == EngineMode.ROOT ||
+                currentMode == EngineMode.ROOT ||
+                shizukuManager.isShizukuRunningAsRoot()
+            if (wantRoot && shizukuManager.verifyRootAccess(timeoutMs = 5000L)) {
+                pendingDesiredMode = null
+                repository.setEngineMode(EngineMode.ROOT)
+                shizukuManager.ensureBoundAndGrantPermissions()
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) applied — Root engine active"
+            } else {
+                pendingDesiredMode = null
+                repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                shizukuManager.ensureBoundAndGrantPermissions()
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Shizuku permission applied — ${shizukuManager.privilege()} active"
+            }
+        } else {
+            shizukuManager.ensureBoundAndGrantPermissions()
+            engineController.triggerImmediateSessionSync()
         }
     }
 
@@ -1378,9 +1387,15 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 shizukuManager.verifyRootAccess(timeoutMs = 5000L)
             }
             if (shizukuManager.state.value == ShizukuState.READY) {
-                shizukuManager.ensureBoundAndGrantPermissions()
+                if (pendingDesiredMode != null) {
+                    applyShizukuReadyState()
+                } else {
+                    shizukuManager.ensureBoundAndGrantPermissions()
+                    engineController.triggerImmediateSessionSync()
+                }
+            } else {
+                engineController.triggerImmediateSessionSync()
             }
-            engineController.triggerImmediateSessionSync()
         }
     }
 
@@ -1399,16 +1414,23 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     fun handleShizukuAction() {
         shizukuManager.refreshStatus()
         if (repository.engineMode.value == EngineMode.ROOT && !shizukuManager.isRootAvailable()) {
+            pendingDesiredMode = EngineMode.ROOT
             verifyAndActivateRootMode()
             return
         }
         when (shizukuManager.state.value) {
             ShizukuState.NEEDS_PERMISSION,
             ShizukuState.DENIED_PERMANENTLY -> {
+                pendingDesiredMode = if (repository.engineMode.value == EngineMode.ROOT) {
+                    EngineMode.ROOT
+                } else {
+                    EngineMode.ADB_SHIZUKU
+                }
                 _statusBanner.value = "Opening Shizuku permission prompt…"
                 shizukuManager.requestPermission()
             }
             ShizukuState.NOT_RUNNING -> {
+                pendingDesiredMode = EngineMode.ADB_SHIZUKU
                 _statusBanner.value = "Opening Shizuku app…"
                 shizukuManager.launchShizukuApp()
             }
@@ -1417,16 +1439,19 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 shizukuManager.openPlayStoreForShizuku()
             }
             ShizukuState.READY -> {
-                if (shizukuManager.isShizukuRunningAsRoot() && repository.engineMode.value == EngineMode.ROOT) {
-                    shizukuManager.verifyRootAccess()
-                    shizukuManager.ensureBoundAndGrantPermissions()
-                    engineController.triggerImmediateSessionSync()
-                    _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) active & synced"
-                } else {
-                    repository.setEngineMode(EngineMode.ADB_SHIZUKU)
-                    shizukuManager.ensureBoundAndGrantPermissions()
-                    engineController.triggerImmediateSessionSync()
-                    _statusBanner.value = "Shizuku (${shizukuManager.privilege()}) connected & active"
+                viewModelScope.launch(Dispatchers.IO) {
+                    if (shizukuManager.isShizukuRunningAsRoot() && repository.engineMode.value == EngineMode.ROOT) {
+                        shizukuManager.verifyRootAccess()
+                        shizukuManager.ensureBoundAndGrantPermissions()
+                        engineController.triggerImmediateSessionSync()
+                        _statusBanner.value = "Shizuku Root (${shizukuManager.privilege()}) active & synced"
+                    } else {
+                        pendingDesiredMode = null
+                        repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                        shizukuManager.ensureBoundAndGrantPermissions()
+                        engineController.triggerImmediateSessionSync()
+                        _statusBanner.value = "Shizuku (${shizukuManager.privilege()}) connected & active"
+                    }
                 }
             }
             else -> shizukuManager.refreshStatus()
