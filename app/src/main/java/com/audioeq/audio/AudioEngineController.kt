@@ -181,11 +181,16 @@ class AudioEngineController(
         val mode = currentEngineMode
         val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
         val privilegeReady = isPrivilegeReadyForMode(mode)
+        val modeOrPrivChanged = forceNextSync ||
+            lastSyncedMode != mode ||
+            lastSyncedPrivilegeReady != privilegeReady
         forceNextSync = false
 
         lastSyncedMode = mode
         lastSyncedPrivilegeReady = privilegeReady
-        masterEngine.setEngineMode(mode, privilegeReady)
+        if (modeOrPrivChanged) {
+            masterEngine.setEngineMode(mode, privilegeReady)
+        }
         MusicAppTracker.setEngineTrackingContext(
             context = context,
             isLegacyMode = mode == EngineMode.LEGACY,
@@ -410,7 +415,11 @@ class AudioEngineController(
             dumpPermissionGranted = hasDumpPermission(),
             shizukuStatus = shizukuManager.state.value.name,
             rootAvailable = shizukuManager.isRootAvailable(),
-            activeSessions = activeSessions.ifEmpty { listOf(0) },
+            activeSessions = if (currentEngineMode == EngineMode.LEGACY) {
+                activeSessions.ifEmpty { listOf(0) }
+            } else {
+                activeSessions
+            },
             operatingMode = masterEngine.activeOperatingMode,
             avgBinderWriteCostMs = roundedBinderCost,
             connectedDeviceKey = currentDeviceKey,

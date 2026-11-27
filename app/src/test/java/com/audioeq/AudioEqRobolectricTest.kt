@@ -286,6 +286,7 @@ class AudioEqRobolectricTest {
             engine.isSession0Healthy()
             assertTrue(engine.getLegacyEngineSummary().startsWith("Mix 0:"))
         } finally {
+            com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 404)
             engine.release()
         }
     }
@@ -339,21 +340,83 @@ class AudioEqRobolectricTest {
     @Test
     fun `verify MasterEqEngine in Root and Shizuku modes disables Global Mix 0 and attaches discovered app sessions`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(
+            context = context,
+            packages = emptySet(),
+            playing = false
+        )
         val engine = com.audioeq.audio.MasterEqEngine(
             context = context,
             onRouteOrDeviceChanged = { _, _, _ -> },
             onSessionsChanged = { _, _ -> }
         )
         try {
+            fun waitUntil(timeoutMs: Long = 1000L, predicate: () -> Boolean): Boolean {
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    if (predicate()) return true
+                    Thread.sleep(25L)
+                }
+                return predicate()
+            }
+
             engine.setEngineMode(com.audioeq.model.EngineMode.ADB_SHIZUKU, privilegeReady = true)
             engine.syncDiscoveredSessions(listOf(707, 808))
-            Thread.sleep(150L)
+            waitUntil {
+                val s = engine.getActiveSessionIds()
+                s.contains(707) && s.contains(808) && !s.contains(0)
+            }
 
             val sids = engine.getActiveSessionIds()
             assertTrue("Shizuku mode must attach discovered session 707", sids.contains(707))
             assertTrue("Shizuku mode must attach discovered session 808", sids.contains(808))
             org.junit.Assert.assertFalse("Shizuku mode must disable Global Mix 0", sids.contains(0))
+            org.junit.Assert.assertFalse(
+                "Privileged Mix 0 fallback must stay off when idle",
+                engine.isPrivilegedMix0FallbackActive()
+            )
+
+            com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(
+                context = context,
+                packages = setOf("com.spotify.music"),
+                playing = true
+            )
+            engine.syncDiscoveredSessions(emptyList())
+            waitUntil {
+                engine.isPrivilegedMix0FallbackActive() && engine.getActiveSessionIds() == listOf(0)
+            }
+
+            val fallbackSids = engine.getActiveSessionIds()
+            assertTrue(
+                "Privileged Mix 0 fallback must activate when audio is playing and zero non-zero sessions exist",
+                engine.isPrivilegedMix0FallbackActive()
+            )
+            assertEquals(listOf(0), fallbackSids)
+
+            com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(
+                context = context,
+                packages = emptySet(),
+                playing = false
+            )
+            engine.syncDiscoveredSessions(emptyList())
+            waitUntil {
+                !engine.isPrivilegedMix0FallbackActive() && !engine.getActiveSessionIds().contains(0)
+            }
+
+            org.junit.Assert.assertFalse(
+                "Privileged Mix 0 fallback must disengage when audio stops playing",
+                engine.isPrivilegedMix0FallbackActive()
+            )
+            org.junit.Assert.assertFalse(
+                "Global Mix 0 must be removed once playback stops",
+                engine.getActiveSessionIds().contains(0)
+            )
         } finally {
+            com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(
+                context = context,
+                packages = emptySet(),
+                playing = false
+            )
             engine.release()
         }
     }

@@ -301,13 +301,40 @@ object ShizukuManager {
         }
 
         if (!musicOnly || discoveredIds.isEmpty()) {
-            val combined = (audioOutput.orEmpty() + "\n" + flingerOutput.orEmpty())
+            val activeAudioPart = audioOutput.orEmpty().let { raw ->
+                val idx = raw.indexOf("audio event log", ignoreCase = true)
+                if (idx >= 0) raw.substring(0, idx) else raw
+            }
+            val activeFlingerPart = flingerOutput.orEmpty().lineSequence().let { seq ->
+                var inEffects = false
+                val kept = StringBuilder()
+                for (line in seq) {
+                    val low = line.lowercase()
+                    if (low.contains("effect chain") || low.trimStart().startsWith("effect id")) {
+                        inEffects = true
+                        continue
+                    }
+                    if (low.contains("tracks of which") || low.contains("output thread")) {
+                        inEffects = false
+                        continue
+                    }
+                    if (!inEffects) {
+                        kept.append(line).append('\n')
+                    }
+                }
+                kept.toString()
+            }
+            val combined = "$activeAudioPart\n$activeFlingerPart"
             if (combined.isNotBlank()) {
                 val activeBlockLines = combined.lineSequence().filter { line ->
                     val low = line.lowercase()
                     !low.contains("state:released") &&
                         !low.contains("state:stopped") &&
-                        !low.contains("content_type_sonification")
+                        !low.contains("state:idle") &&
+                        !low.contains("state:paused") &&
+                        !low.contains("state:unknown") &&
+                        !low.contains("content_type_sonification") &&
+                        !low.contains("content_type_speech")
                 }.joinToString("\n")
                 val sessionRegex = Regex("""(?:sessionId|session)\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
                 for (m in sessionRegex.findAll(activeBlockLines)) {
