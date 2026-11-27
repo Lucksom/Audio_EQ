@@ -207,8 +207,10 @@ class AudioEngineController(
             }
             if (latestRenderParams.musicOnlyTracking) {
                 merged.addAll(MusicAppTracker.getVerifiedMusicSessionIds())
-                merged.addAll(MusicAppTracker.getBroadcastSessionIds())
-            } else {
+                if (merged.isEmpty()) {
+                    merged.addAll(MusicAppTracker.getBroadcastSessionIds())
+                }
+            } else if (merged.isEmpty()) {
                 merged.addAll(MusicAppTracker.getAllBroadcastSessionIds())
             }
             masterEngine.syncDiscoveredSessions(merged)

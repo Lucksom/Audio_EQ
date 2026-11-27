@@ -325,23 +325,32 @@ object ShizukuManager {
 
         if (!musicOnly || discoveredIds.isEmpty()) {
             val activeAudioPart = audioOutput.orEmpty().let { raw ->
-                val idx = raw.indexOf("audio event log", ignoreCase = true)
+                val idx = listOf(
+                    raw.indexOf("audio event log", ignoreCase = true),
+                    raw.indexOf("playback activity as reported", ignoreCase = true),
+                    raw.indexOf("event log:", ignoreCase = true)
+                ).filter { it >= 0 }.minOrNull() ?: -1
                 if (idx >= 0) raw.substring(0, idx) else raw
             }
             val activeFlingerPart = flingerOutput.orEmpty().lineSequence().let { seq ->
-                var inEffects = false
+                var inSkipped = false
                 val kept = StringBuilder()
                 for (line in seq) {
                     val low = line.lowercase()
-                    if (low.contains("effect chain") || low.trimStart().startsWith("effect id")) {
-                        inEffects = true
+                    val trimmed = low.trimStart()
+                    if (low.contains("effect chain") ||
+                        trimmed.startsWith("effect id") ||
+                        low.contains("notification client") ||
+                        low.contains("event log")
+                    ) {
+                        inSkipped = true
                         continue
                     }
                     if (low.contains("tracks of which") || low.contains("output thread")) {
-                        inEffects = false
+                        inSkipped = false
                         continue
                     }
-                    if (!inEffects) {
+                    if (!inSkipped) {
                         kept.append(line).append('\n')
                     }
                 }
@@ -349,15 +358,22 @@ object ShizukuManager {
             }
             val combined = "$activeAudioPart\n$activeFlingerPart"
             if (combined.isNotBlank()) {
+                val inactiveTrackRegex = Regex("""^\s*\d+\s+no\s+""", RegexOption.IGNORE_CASE)
                 val activeBlockLines = combined.lineSequence().filter { line ->
                     val low = line.lowercase()
-                    !low.contains("state:released") &&
+                    (!low.contains("state:") || low.contains("state:started")) &&
+                        !low.contains("state:released") &&
                         !low.contains("state:stopped") &&
                         !low.contains("state:idle") &&
                         !low.contains("state:paused") &&
+                        !low.contains("state:created") &&
                         !low.contains("state:unknown") &&
+                        !low.contains("active=false") &&
+                        !low.contains("active: no") &&
+                        !low.contains("standby: yes") &&
                         !low.contains("content_type_sonification") &&
-                        !low.contains("content_type_speech")
+                        !low.contains("content_type_speech") &&
+                        !inactiveTrackRegex.containsMatchIn(line)
                 }.joinToString("\n")
                 val sessionRegex = Regex("""(?:sessionId|session)\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
                 for (m in sessionRegex.findAll(activeBlockLines)) {

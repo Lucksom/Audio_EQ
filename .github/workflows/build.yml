@@ -2,6 +2,17 @@ name: Build and Release Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: 'Run unit tests before building Release APK'
+        required: false
+        type: boolean
+        default: true
+      release_note:
+        description: 'Optional extra note to include in the GitHub Release'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -110,6 +121,11 @@ jobs:
             else
               echo "- Release build ${APP_VERSION_NAME} (${SHORT_SHA})"
             fi
+            if [ -n "${{ inputs.release_note }}" ]; then
+              echo ""
+              echo "### Release Note"
+              echo "${{ inputs.release_note }}"
+            fi
             echo ""
             echo "---"
             echo "- **App Version:** \`${APP_VERSION_NAME}\` (Build \`${APP_VERSION_CODE}\`)"
@@ -117,6 +133,7 @@ jobs:
           } > "$NOTES_FILE"
 
       - name: Run Unit Tests
+        if: ${{ inputs.run_tests != false }}
         run: |
           GRADLE_CMD="gradle"
           if [ -f "./gradlew" ]; then

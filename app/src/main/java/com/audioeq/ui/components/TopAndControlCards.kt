@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,9 +32,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -863,30 +866,44 @@ fun StatusBanner(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMonetPalette.current
+    val isWarningOrTip = message.startsWith("Tip:", ignoreCase = true) ||
+        message.contains("distort", ignoreCase = true) ||
+        message.contains("warning", ignoreCase = true)
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(palette.secondaryC)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)
             .testTag("status_feedback_banner"),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Icon(
+            imageVector = if (isWarningOrTip) Icons.Default.WarningAmber else Icons.Default.Info,
+            contentDescription = if (isWarningOrTip) "Audio tip" else "Status update",
+            tint = palette.primary,
+            modifier = Modifier
+                .padding(end = 10.dp)
+                .size(18.dp)
+        )
         Text(
             text = message,
             fontSize = 13.sp,
+            lineHeight = 18.sp,
             color = palette.onSecondaryC,
             modifier = Modifier
                 .weight(1f)
-                .padding(end = 12.dp)
+                .padding(end = 8.dp)
         )
         Box(
             modifier = Modifier
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .clickable { onDismiss() }
                 .padding(horizontal = 10.dp, vertical = 6.dp)
-                .testTag("banner_dismiss_button")
+                .testTag("banner_dismiss_button"),
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 text = "Dismiss",

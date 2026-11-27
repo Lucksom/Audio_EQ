@@ -3,6 +3,7 @@ package com.audioeq.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.audioeq.R
 import com.audioeq.audio.AudioEngineController
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.AutoEq
@@ -178,7 +179,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val _showCalibrationSheet = MutableStateFlow(false)
     private val _showSettingsSheet = MutableStateFlow(false)
 
-    private val _statusBanner = MutableStateFlow<String?>(null)
+    private val _statusBanner = MutableStateFlow<String?>(
+        application.getString(R.string.banner_disable_system_eq_tip)
+    )
     private val _githubUpdateState = MutableStateFlow<GitHubUpdateState>(GitHubUpdateState.Idle)
     private val _isEqEnabled = MutableStateFlow(true)
     private val _isAbCompare = MutableStateFlow(false)

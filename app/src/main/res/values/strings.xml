@@ -31,4 +31,5 @@
     <string name="mode_root_desc">Deep Biquad DSP, Linkwitz-Riley Mid/Side width, and system Magisk module.</string>
     <string name="test_tone_title">DSP Reference Monitor</string>
     <string name="settings_title">Settings &amp; Diagnostics</string>
+    <string name="banner_disable_system_eq_tip">Tip: Turn off your device\'s built-in system equalizer or sound effects to avoid distorted audio from running two equalizers.</string>
 </resources>

@@ -559,4 +559,126 @@ class AudioEqRobolectricTest {
         com.audioeq.shizuku.ShizukuManager.init(context)
         com.audioeq.shizuku.ShizukuManager.refresh()
     }
+
+    @Test
+    fun `verify notification session summary shows only current latest session and ignores inactive AudioFlinger tracks`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(emptySet())
+        com.audioeq.audio.MusicAppTracker.setExcludedMusicPackages(emptySet())
+        com.audioeq.audio.MusicAppTracker.setEngineTrackingContext(
+            context = context,
+            isLegacyMode = false,
+            hasPrivilegedControl = true
+        )
+
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
+            context = context,
+            sessionId = 2448257,
+            packageName = "app.morphe.android.youtube",
+            contentType = android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+        )
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
+            context = context,
+            sessionId = 2448305,
+            packageName = "app.morphe.android.youtube",
+            contentType = android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+        )
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionOpened(
+            context = context,
+            sessionId = 2448545,
+            packageName = "app.morphe.android.youtube",
+            contentType = android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC
+        )
+
+        val broadcastSummary = com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value
+        assertTrue("Summary must contain latest session #2448545: $broadcastSummary", broadcastSummary.contains("#2448545"))
+        org.junit.Assert.assertFalse("Summary must not accumulate old session #2448257: $broadcastSummary", broadcastSummary.contains("2448257"))
+        org.junit.Assert.assertFalse("Summary must not accumulate old session #2448305: $broadcastSummary", broadcastSummary.contains("2448305"))
+        org.junit.Assert.assertFalse("Summary must not list multiple comma-separated sessions: $broadcastSummary", broadcastSummary.contains(","))
+
+        val flingerDump = """
+            Output thread 0x1234:
+            2 Tracks of which 1 are active
+              Name Active Client Type      Fmt Chn mask Session
+              101     no    1111    3 00000001 00000003 2448305
+              102    yes    1111    3 00000001 00000003 2448545
+        """.trimIndent()
+        com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(
+            context = context,
+            packages = setOf("app.morphe.android.youtube"),
+            playing = true
+        )
+        val parsed = com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
+            context = context,
+            audioDumpsys = null,
+            flingerDumpsys = flingerDump
+        )
+        assertEquals(listOf(2448545), parsed.map { it.sessionId })
+
+        com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(context, parsed)
+        val finalSummary = com.audioeq.audio.MusicAppTracker.trackedSessionsSummary.value
+        assertTrue("Final summary must show latest active session #2448545: $finalSummary", finalSummary.contains("#2448545"))
+        org.junit.Assert.assertFalse("Final summary must exclude inactive session #2448305: $finalSummary", finalSummary.contains("2448305"))
+
+        com.audioeq.audio.MusicAppTracker.updateNotificationMediaPackages(context, emptySet(), playing = false)
+        com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
+        com.audioeq.audio.MusicAppTracker.onBroadcastSessionClosed(context, 2448545)
+    }
+
+    @Test
+    fun `verify equalizer notification is permanent with auto-restore deleteIntent until turned off`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val notif = com.audioeq.audio.EqualizerNotificationHelper.buildNotification(
+            context = context,
+            presetName = "Flat",
+            profileTitle = "Off",
+            routeLabel = "Phone Speaker",
+            engineShortTitle = "Root",
+            musicSummary = "YouTube Morphe #2448545"
+        )
+        assertTrue(
+            "Notification must set FLAG_ONGOING_EVENT",
+            (notif.flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0
+        )
+        assertTrue(
+            "Notification must set FLAG_NO_CLEAR",
+            (notif.flags and android.app.Notification.FLAG_NO_CLEAR) != 0
+        )
+        assertNotNull("Notification must attach deleteIntent for Android 14+ swipe-away auto-restore", notif.deleteIntent)
+
+        com.audioeq.audio.EqualizerNotificationHelper.updateOrCancelPersistentNotification(
+            context = context,
+            masterEnabled = true,
+            presetName = "Flat",
+            profileTitle = "Off",
+            routeLabel = "Phone Speaker",
+            engineShortTitle = "Root",
+            musicSummary = "YouTube Morphe #2448545",
+            forceRepost = true
+        )
+        assertTrue(com.audioeq.audio.EqualizerNotificationHelper.isPermanentNotificationActive(context))
+
+        val receiver = com.audioeq.audio.EqualizerActionReceiver()
+        receiver.onReceive(
+            context,
+            android.content.Intent(com.audioeq.audio.EqualizerNotificationHelper.ACTION_RESTORE_NOTIFICATION)
+        )
+        assertTrue(
+            "Swiping away notification while EQ is ON must keep permanent notification active",
+            com.audioeq.audio.EqualizerNotificationHelper.isPermanentNotificationActive(context)
+        )
+
+        receiver.onReceive(
+            context,
+            android.content.Intent(com.audioeq.audio.EqualizerNotificationHelper.ACTION_STOP_EQUALIZER)
+        )
+        org.junit.Assert.assertFalse(
+            "Turning off Equalizer must deactivate permanent notification",
+            com.audioeq.audio.EqualizerNotificationHelper.isPermanentNotificationActive(context)
+        )
+        org.junit.Assert.assertFalse(
+            "restoreIfActive must not restore notification once Equalizer is turned off",
+            com.audioeq.audio.EqualizerNotificationHelper.restoreIfActive(context)
+        )
+    }
 }

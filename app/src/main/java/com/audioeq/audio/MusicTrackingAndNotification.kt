@@ -29,6 +29,8 @@ import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import android.content.pm.ServiceInfo
+import androidx.core.app.ServiceCompat
 import com.audioeq.MainActivity
 import com.audioeq.R
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +43,8 @@ data class TrackedMusicSession(
     val sessionId: Int,
     val packageName: String,
     val appLabel: String,
-    val source: String
+    val source: String,
+    val updatedAtMs: Long = System.currentTimeMillis()
 )
 
 data class DeviceAppEntry(
@@ -509,6 +512,18 @@ object MusicAppTracker {
         }
     }
 
+    private fun removeOlderBroadcastSessionsForPackage(packageName: String, keepSessionId: Int) {
+        if (packageName.isBlank() || packageName == "audio.session" || packageName == "external.player") {
+            return
+        }
+        allBroadcastSessions.entries.removeIf { (sid, session) ->
+            sid != keepSessionId && session.packageName == packageName
+        }
+        broadcastMusicSessions.entries.removeIf { (sid, session) ->
+            sid != keepSessionId && session.packageName == packageName
+        }
+    }
+
     fun onBroadcastSessionOpened(
         context: Context,
         sessionId: Int,
@@ -527,22 +542,24 @@ object MusicAppTracker {
             sessionId = sessionId,
             packageName = pkg,
             appLabel = label,
-            source = "AudioEffect"
+            source = "AudioEffect",
+            updatedAtMs = System.currentTimeMillis()
         )
+        removeOlderBroadcastSessionsForPackage(pkg, sessionId)
         val prev = allBroadcastSessions.put(sessionId, tracked)
         persistBroadcastSessions(context)
 
         if (!isMusicAppPackage(context, cleanedPkg, contentType)) {
             broadcastMusicSessions.remove(sessionId)
             rebuildSummary(context)
-            if (prev != tracked) {
+            if (prev?.sessionId != tracked.sessionId || prev.packageName != tracked.packageName) {
                 onMusicStateChanged?.invoke()
             }
             return false
         }
         broadcastMusicSessions[sessionId] = tracked
         rebuildSummary(context)
-        if (prev != tracked) {
+        if (prev?.sessionId != tracked.sessionId || prev.packageName != tracked.packageName) {
             onMusicStateChanged?.invoke()
         }
         return true
@@ -557,15 +574,17 @@ object MusicAppTracker {
             sessionId = sessionId,
             packageName = pkg,
             appLabel = resolveAppLabel(context, pkg),
-            source = "ControlPanel"
+            source = "ControlPanel",
+            updatedAtMs = System.currentTimeMillis()
         )
+        removeOlderBroadcastSessionsForPackage(pkg, sessionId)
         val prev = allBroadcastSessions.put(sessionId, tracked)
         if (isMusicAppPackage(context, pkg, AudioEffect.CONTENT_TYPE_MUSIC)) {
             broadcastMusicSessions[sessionId] = tracked
         }
         persistBroadcastSessions(context)
         rebuildSummary(context)
-        if (prev != tracked) {
+        if (prev?.sessionId != tracked.sessionId || prev.packageName != tracked.packageName) {
             onMusicStateChanged?.invoke()
         }
     }
@@ -584,9 +603,37 @@ object MusicAppTracker {
     fun updatePrivilegedMusicSessions(context: Context, sessions: List<TrackedMusicSession>) {
         lastAppContext = context.applicationContext
         val allowedSessions = sessions.filter { it.sessionId > 0 && isPackageCurrentlyAllowed(it.packageName) }
+        val liveSids = allowedSessions.map { it.sessionId }.toSet()
+        val livePkgs = allowedSessions.map { it.packageName }.toSet()
+
+        var prunedBroadcast = false
+        if (liveSids.isNotEmpty()) {
+            val removedB = broadcastMusicSessions.entries.removeIf { (sid, s) ->
+                (privilegedModeActive && sid !in liveSids) ||
+                    (s.packageName in livePkgs && sid !in liveSids)
+            }
+            val removedA = allBroadcastSessions.entries.removeIf { (sid, s) ->
+                (privilegedModeActive && sid !in liveSids) ||
+                    (s.packageName in livePkgs && sid !in liveSids)
+            }
+            prunedBroadcast = removedB || removedA
+        } else if (privilegedModeActive && !_activeMusicPlaying.value && activeMediaPlaybackCount == 0) {
+            if (broadcastMusicSessions.isNotEmpty() || allBroadcastSessions.isNotEmpty()) {
+                broadcastMusicSessions.clear()
+                allBroadcastSessions.clear()
+                prunedBroadcast = true
+            }
+        }
+        if (prunedBroadcast) {
+            persistBroadcastSessions(context)
+        }
+
         val sameKeys = privilegedMusicSessions.size == allowedSessions.size &&
-            allowedSessions.all { privilegedMusicSessions[it.sessionId] == it }
-        if (sameKeys) return
+            allowedSessions.all { existing ->
+                val cur = privilegedMusicSessions[existing.sessionId]
+                cur != null && cur.packageName == existing.packageName && cur.appLabel == existing.appLabel
+            }
+        if (sameKeys && !prunedBroadcast) return
         privilegedMusicSessions.clear()
         for (s in allowedSessions) {
             privilegedMusicSessions[s.sessionId] = s
@@ -686,9 +733,11 @@ object MusicAppTracker {
                 result.add(sid)
             }
         }
-        for ((sid, session) in broadcastMusicSessions) {
-            if (isPackageCurrentlyAllowed(session.packageName)) {
-                result.add(sid)
+        if (!privilegedModeActive || result.isEmpty()) {
+            for ((sid, session) in broadcastMusicSessions) {
+                if (isPackageCurrentlyAllowed(session.packageName)) {
+                    result.add(sid)
+                }
             }
         }
         return result
@@ -696,14 +745,16 @@ object MusicAppTracker {
 
     fun getAllTrackedSessions(): List<TrackedMusicSession> {
         val merged = LinkedHashMap<Int, TrackedMusicSession>()
-        for ((sid, s) in broadcastMusicSessions) {
+        for ((sid, s) in privilegedMusicSessions) {
             if (isPackageCurrentlyAllowed(s.packageName)) {
                 merged[sid] = s
             }
         }
-        for ((sid, s) in privilegedMusicSessions) {
-            if (isPackageCurrentlyAllowed(s.packageName)) {
-                merged[sid] = s
+        if (!privilegedModeActive || merged.isEmpty()) {
+            for ((sid, s) in broadcastMusicSessions) {
+                if (isPackageCurrentlyAllowed(s.packageName)) {
+                    merged.putIfAbsent(sid, s)
+                }
             }
         }
         return merged.values.sortedBy { it.sessionId }
@@ -724,7 +775,10 @@ object MusicAppTracker {
             var lastSeenPkg: String? = null
             for (line in lines) {
                 val lowerLine = line.lowercase(Locale.US)
-                if (lowerLine.contains("audio event log")) {
+                if (lowerLine.contains("audio event log") ||
+                    lowerLine.contains("playback activity as reported") ||
+                    lowerLine.trimStart().startsWith("event log:")
+                ) {
                     break
                 }
                 val uPidPair = Regex("""u/pid\s*[:=]\s*(\d+)\s*/\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
@@ -744,10 +798,14 @@ object MusicAppTracker {
                 if (!line.contains("sessionId", ignoreCase = true) && !line.contains("session:", ignoreCase = true) && !line.contains("session=", ignoreCase = true)) {
                     continue
                 }
+                if (lowerLine.contains("state:") && !lowerLine.contains("state:started")) {
+                    continue
+                }
                 if (lowerLine.contains("state:released") ||
                     lowerLine.contains("state:stopped") ||
                     lowerLine.contains("state:idle") ||
                     lowerLine.contains("state:paused") ||
+                    lowerLine.contains("state:created") ||
                     lowerLine.contains("state:unknown")
                 ) {
                     continue
@@ -796,32 +854,77 @@ object MusicAppTracker {
         }
 
         if (!flingerDumpsys.isNullOrBlank()) {
-            var inEffectsBlock = false
+            var inSkippedBlock = false
+            var headerClientCol = 2
+            var headerSessionCol = -1
             val lines = flingerDumpsys.lineSequence()
             for (line in lines) {
                 val lowerLine = line.lowercase(Locale.US)
-                if (lowerLine.contains("effect chain") || lowerLine.trimStart().startsWith("effect id")) {
-                    inEffectsBlock = true
+                val trimmedLower = lowerLine.trimStart()
+                if (lowerLine.contains("effect chain") ||
+                    trimmedLower.startsWith("effect id") ||
+                    lowerLine.contains("notification client") ||
+                    lowerLine.contains("event log")
+                ) {
+                    inSkippedBlock = true
                     continue
                 }
                 if (lowerLine.contains("tracks of which") || lowerLine.contains("output thread")) {
-                    inEffectsBlock = false
+                    inSkippedBlock = false
+                    headerClientCol = 2
+                    headerSessionCol = -1
                     continue
                 }
-                if (inEffectsBlock) continue
-                val sidMatch = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
-                val tabularMatch = if (sidMatch == null) {
-                    Regex("""^\s*\d+\s+(?:yes|no)\s+(\d+)\s+\d+\s+\S+\s+(\d+)""", RegexOption.IGNORE_CASE).find(line)
-                } else null
+                if (inSkippedBlock) continue
+                if (lowerLine.contains("active") && lowerLine.contains("session") &&
+                    (lowerLine.contains("client") || lowerLine.contains("name") || lowerLine.contains("id"))
+                ) {
+                    val normHeader = lowerLine
+                        .replace("chn mask", "chnmask")
+                        .replace("port id", "portid")
+                        .replace("l db", "ldb")
+                        .replace("r db", "rdb")
+                        .trim()
+                        .split(Regex("""\s+"""))
+                    val cIdx = normHeader.indexOfFirst { it == "client" }
+                    val sIdx = normHeader.indexOfFirst { it == "session" || it == "sessionid" }
+                    if (cIdx >= 0) headerClientCol = cIdx
+                    if (sIdx >= 0) headerSessionCol = sIdx
+                    continue
+                }
+                if (lowerLine.contains("active=false") ||
+                    lowerLine.contains("active: no") ||
+                    lowerLine.contains("standby: yes") ||
+                    lowerLine.contains("state=stopped") ||
+                    lowerLine.contains("state=paused") ||
+                    lowerLine.contains("state=idle") ||
+                    lowerLine.contains("state=terminated") ||
+                    lowerLine.contains("state=flushed") ||
+                    Regex("""^\s*\d+\s+no\s+""", RegexOption.IGNORE_CASE).containsMatchIn(line)
+                ) {
+                    continue
+                }
+                val sidMatch = Regex("""(?:session(?:Id)?|Session)\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
+                var tabularClient: Int? = null
+                var tabularSid: Int? = null
+                if (sidMatch == null && Regex("""^\s*\d+\s+yes\s+""", RegexOption.IGNORE_CASE).containsMatchIn(line)) {
+                    val cols = line.trim().split(Regex("""\s+"""))
+                    if (cols.size >= 4) {
+                        tabularClient = cols.getOrNull(headerClientCol)?.toIntOrNull()
+                        tabularSid = when {
+                            headerSessionCol >= 0 -> cols.getOrNull(headerSessionCol)?.toIntOrNull()
+                            cols.size >= 7 && cols[4].length >= 6 && cols[5].length >= 6 -> cols[6].toIntOrNull()
+                            else -> cols.getOrNull(3)?.toIntOrNull()
+                        }
+                    }
+                }
 
-                val sid = sidMatch?.groupValues?.get(1)?.toIntOrNull()
-                    ?: tabularMatch?.groupValues?.get(2)?.toIntOrNull()
+                val sid = sidMatch?.groupValues?.get(1)?.toIntOrNull() ?: tabularSid
                 if (sid != null && sid > 0 && !results.containsKey(sid)) {
                     val uidMatch = Regex("""\buid\s*[:=]?\s*(\d{4,})""", RegexOption.IGNORE_CASE).find(line)
                     val clientMatch = Regex("""\bclient\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
                     val directUid = uidMatch?.groupValues?.get(1)?.toIntOrNull()
-                    val clientId = clientMatch?.groupValues?.get(1)?.toIntOrNull()
-                        ?: tabularMatch?.groupValues?.get(1)?.toIntOrNull()
+                    val clientId = clientMatch?.groupValues?.get(1)?.toIntOrNull() ?: tabularClient
                     val resolvedUid = when {
                         directUid != null && directUid >= 10000 -> directUid
                         clientId != null && pidToUid.containsKey(clientId) -> pidToUid[clientId]
@@ -856,6 +959,19 @@ object MusicAppTracker {
         return results.values.toList()
     }
 
+    private fun selectCurrentSession(tracked: List<TrackedMusicSession>): TrackedMusicSession? {
+        if (tracked.isEmpty()) return null
+        val activeMediaPkgs = _activeMediaPackages.value
+        val prioritized = if (activeMediaPkgs.isNotEmpty()) {
+            tracked.filter { it.packageName in activeMediaPkgs }.ifEmpty { tracked }
+        } else {
+            tracked
+        }
+        return prioritized.maxWithOrNull(
+            compareBy<TrackedMusicSession> { it.updatedAtMs }.thenBy { it.sessionId }
+        )
+    }
+
     private fun rebuildSummary(context: Context) {
         lastAppContext = context.applicationContext
         isNotificationListenerEnabled(context)
@@ -863,16 +979,9 @@ object MusicAppTracker {
             _trackedSessionsSummary.value = "Universal (All Audio)"
             return
         }
-        val tracked = getAllTrackedSessions()
-        _trackedSessionsSummary.value = if (tracked.isNotEmpty()) {
-            val byApp = LinkedHashMap<String, MutableList<Int>>()
-            for (s in tracked) {
-                byApp.getOrPut(s.appLabel) { mutableListOf() }.add(s.sessionId)
-            }
-            byApp.entries.joinToString(", ") { (label, sids) ->
-                val sidList = sids.distinct().joinToString(", ") { "#$it" }
-                "$label ($sidList)"
-            }
+        val current = selectCurrentSession(getAllTrackedSessions())
+        _trackedSessionsSummary.value = if (current != null) {
+            "${current.appLabel} #${current.sessionId}"
         } else {
             "No active music session"
         }
@@ -893,6 +1002,9 @@ class EqMediaNotificationListenerService : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         super.onNotificationRemoved(sbn)
+        if (sbn?.packageName == packageName && sbn.id == EqualizerNotificationHelper.NOTIFICATION_ID) {
+            EqualizerNotificationHelper.restoreIfActive(applicationContext)
+        }
         refreshActiveMediaNotifications()
     }
 
@@ -953,6 +1065,76 @@ object EqualizerNotificationHelper {
     const val CHANNEL_ID = "audio_eq_running_channel"
     const val NOTIFICATION_ID = 3101
     const val ACTION_STOP_EQUALIZER = "com.audioeq.action.STOP_EQUALIZER"
+    const val ACTION_RESTORE_NOTIFICATION = "com.audioeq.action.RESTORE_NOTIFICATION"
+
+    private const val PREFS_NOTIF_STATE = "audio_eq_notif_state"
+    private const val KEY_ACTIVE = "active"
+    private const val KEY_PRESET = "preset"
+    private const val KEY_PROFILE = "profile"
+    private const val KEY_ROUTE = "route"
+    private const val KEY_ENGINE = "engine"
+    private const val KEY_SUMMARY = "summary"
+
+    internal data class NotificationPayload(
+        val presetName: String,
+        val profileTitle: String,
+        val routeLabel: String,
+        val engineShortTitle: String,
+        val musicSummary: String
+    )
+
+    @Volatile
+    private var lastNotificationSignature: String? = null
+
+    @Volatile
+    private var masterEqActive: Boolean = false
+
+    @Volatile
+    private var lastPayload: NotificationPayload? = null
+
+    @Volatile
+    private var lastRestoreElapsedMs: Long = 0L
+
+    private fun savePersistedState(context: Context, active: Boolean, payload: NotificationPayload?) {
+        runCatching {
+            val editor = context.applicationContext
+                .getSharedPreferences(PREFS_NOTIF_STATE, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_ACTIVE, active)
+            if (payload != null) {
+                editor
+                    .putString(KEY_PRESET, payload.presetName)
+                    .putString(KEY_PROFILE, payload.profileTitle)
+                    .putString(KEY_ROUTE, payload.routeLabel)
+                    .putString(KEY_ENGINE, payload.engineShortTitle)
+                    .putString(KEY_SUMMARY, payload.musicSummary)
+            }
+            editor.apply()
+        }
+    }
+
+    internal fun loadPersistedState(context: Context): Pair<Boolean, NotificationPayload> {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NOTIF_STATE, Context.MODE_PRIVATE)
+        val active = masterEqActive || prefs.getBoolean(KEY_ACTIVE, false)
+        val cached = lastPayload
+        val payload = cached ?: NotificationPayload(
+            presetName = prefs.getString(KEY_PRESET, "Flat") ?: "Flat",
+            profileTitle = prefs.getString(KEY_PROFILE, "Off") ?: "Off",
+            routeLabel = prefs.getString(KEY_ROUTE, "Phone Speaker") ?: "Phone Speaker",
+            engineShortTitle = prefs.getString(KEY_ENGINE, "Legacy") ?: "Legacy",
+            musicSummary = prefs.getString(KEY_SUMMARY, "Universal (All Audio)") ?: "Universal (All Audio)"
+        )
+        return active to payload
+    }
+
+    fun isPermanentNotificationActive(context: Context): Boolean {
+        if (masterEqActive) return true
+        return runCatching {
+            context.applicationContext
+                .getSharedPreferences(PREFS_NOTIF_STATE, Context.MODE_PRIVATE)
+                .getBoolean(KEY_ACTIVE, false)
+        }.getOrDefault(false)
+    }
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1004,6 +1186,16 @@ object EqualizerNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val restoreIntent = Intent(context, EqualizerActionReceiver::class.java).apply {
+            action = ACTION_RESTORE_NOTIFICATION
+        }
+        val restorePending = PendingIntent.getBroadcast(
+            context,
+            2,
+            restoreIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val profilePart = if (profileTitle.isNotBlank() && !profileTitle.equals("Off", ignoreCase = true)) {
             " · $profileTitle"
         } else {
@@ -1012,28 +1204,49 @@ object EqualizerNotificationHelper {
         val title = "Equalizer Running · $presetName$profilePart"
         val subtitle = "$routeLabel · $engineShortTitle · $musicSummary"
 
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_eq_notification)
             .setContentTitle(title)
             .setContentText(subtitle)
             .setStyle(NotificationCompat.BigTextStyle().bigText(subtitle))
             .setOngoing(true)
             .setAutoCancel(false)
+            .setSilent(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openPending)
+            .setDeleteIntent(restorePending)
             .addAction(
                 0,
                 "Turn Off",
                 stopPending
             )
             .build()
+        notification.flags = notification.flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR
+        return notification
     }
 
-    @Volatile
-    private var lastNotificationSignature: String? = null
+    fun restoreIfActive(context: Context): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRestoreElapsedMs < 200L) return false
+        val (active, payload) = loadPersistedState(context)
+        if (!active) return false
+        lastRestoreElapsedMs = now
+        updateOrCancelPersistentNotification(
+            context = context.applicationContext,
+            masterEnabled = true,
+            presetName = payload.presetName,
+            profileTitle = payload.profileTitle,
+            routeLabel = payload.routeLabel,
+            engineShortTitle = payload.engineShortTitle,
+            musicSummary = payload.musicSummary,
+            forceRepost = true
+        )
+        return true
+    }
 
     fun updateOrCancelPersistentNotification(
         context: Context,
@@ -1042,7 +1255,8 @@ object EqualizerNotificationHelper {
         profileTitle: String,
         routeLabel: String,
         engineShortTitle: String,
-        musicSummary: String
+        musicSummary: String,
+        forceRepost: Boolean = false
     ) {
         try {
             val signature = if (!masterEnabled) {
@@ -1050,16 +1264,30 @@ object EqualizerNotificationHelper {
             } else {
                 "ON|$presetName|$profileTitle|$routeLabel|$engineShortTitle|$musicSummary"
             }
-            if (lastNotificationSignature == signature) return
+            if (!forceRepost && lastNotificationSignature == signature) return
             lastNotificationSignature = signature
 
             if (!masterEnabled) {
+                masterEqActive = false
+                lastPayload = null
+                savePersistedState(context, active = false, payload = null)
                 NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
                 runCatching {
                     context.stopService(Intent(context, EqualizerNotificationService::class.java))
                 }
                 return
             }
+
+            val payload = NotificationPayload(
+                presetName = presetName,
+                profileTitle = profileTitle,
+                routeLabel = routeLabel,
+                engineShortTitle = engineShortTitle,
+                musicSummary = musicSummary
+            )
+            masterEqActive = true
+            lastPayload = payload
+            savePersistedState(context, active = true, payload = payload)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val granted = ContextCompat.checkSelfPermission(
@@ -1104,11 +1332,17 @@ object EqualizerNotificationHelper {
 class EqualizerNotificationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val presetName = intent?.getStringExtra("presetName") ?: "Flat"
-        val profileTitle = intent?.getStringExtra("profileTitle") ?: "Off"
-        val routeLabel = intent?.getStringExtra("routeLabel") ?: "Speaker"
-        val engineShortTitle = intent?.getStringExtra("engineShortTitle") ?: "Legacy"
-        val musicSummary = intent?.getStringExtra("musicSummary") ?: "Music Tracking Active"
+        val (persistedActive, persistedPayload) = EqualizerNotificationHelper.loadPersistedState(applicationContext)
+        if (intent == null && !persistedActive) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val presetName = intent?.getStringExtra("presetName") ?: persistedPayload.presetName
+        val profileTitle = intent?.getStringExtra("profileTitle") ?: persistedPayload.profileTitle
+        val routeLabel = intent?.getStringExtra("routeLabel") ?: persistedPayload.routeLabel
+        val engineShortTitle = intent?.getStringExtra("engineShortTitle") ?: persistedPayload.engineShortTitle
+        val musicSummary = intent?.getStringExtra("musicSummary") ?: persistedPayload.musicSummary
 
         try {
             val notification = EqualizerNotificationHelper.buildNotification(
@@ -1119,15 +1353,34 @@ class EqualizerNotificationService : Service() {
                 engineShortTitle = engineShortTitle,
                 musicSummary = musicSummary
             )
-            startForeground(EqualizerNotificationHelper.NOTIFICATION_ID, notification)
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(
+                this,
+                EqualizerNotificationHelper.NOTIFICATION_ID,
+                notification,
+                fgsType
+            )
         } catch (_: Throwable) {
         }
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (EqualizerNotificationHelper.isPermanentNotificationActive(applicationContext)) {
+            EqualizerNotificationHelper.restoreIfActive(applicationContext)
+        }
+    }
+
     override fun onDestroy() {
-        runCatching {
-            NotificationManagerCompat.from(applicationContext).cancel(EqualizerNotificationHelper.NOTIFICATION_ID)
+        if (!EqualizerNotificationHelper.isPermanentNotificationActive(applicationContext)) {
+            runCatching {
+                NotificationManagerCompat.from(applicationContext).cancel(EqualizerNotificationHelper.NOTIFICATION_ID)
+            }
         }
         super.onDestroy()
     }
@@ -1138,20 +1391,30 @@ class EqualizerNotificationService : Service() {
 class EqualizerActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (context == null) return
-        if (intent?.action == EqualizerNotificationHelper.ACTION_STOP_EQUALIZER) {
-            runCatching {
-                val repo = com.audioeq.data.EqRepository(context.applicationContext)
-                repo.setMasterEnabled(false)
-                AudioEngineController.disableActiveInstanceFromNotification()
-                EqualizerNotificationHelper.updateOrCancelPersistentNotification(
-                    context = context.applicationContext,
-                    masterEnabled = false,
-                    presetName = "Flat",
-                    profileTitle = "Off",
-                    routeLabel = "Speaker",
-                    engineShortTitle = "Legacy",
-                    musicSummary = ""
-                )
+        when (intent?.action) {
+            EqualizerNotificationHelper.ACTION_STOP_EQUALIZER -> {
+                runCatching {
+                    val repo = com.audioeq.data.EqRepository(context.applicationContext)
+                    repo.setMasterEnabled(false)
+                    AudioEngineController.disableActiveInstanceFromNotification()
+                    EqualizerNotificationHelper.updateOrCancelPersistentNotification(
+                        context = context.applicationContext,
+                        masterEnabled = false,
+                        presetName = "Flat",
+                        profileTitle = "Off",
+                        routeLabel = "Speaker",
+                        engineShortTitle = "Legacy",
+                        musicSummary = "",
+                        forceRepost = true
+                    )
+                }
+            }
+            EqualizerNotificationHelper.ACTION_RESTORE_NOTIFICATION -> {
+                runCatching {
+                    if (EqualizerNotificationHelper.isPermanentNotificationActive(context.applicationContext)) {
+                        EqualizerNotificationHelper.restoreIfActive(context.applicationContext)
+                    }
+                }
             }
         }
     }
