@@ -183,7 +183,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val _isEqEnabled = MutableStateFlow(true)
     private val _isAbCompare = MutableStateFlow(false)
     private val _editingRightChannel = MutableStateFlow(false)
-    private val _intensity = MutableStateFlow(1.0f)
 
     private val flow1A = combine(
         repository.engineMode,
@@ -208,7 +207,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _isEqEnabled,
         _isAbCompare,
         _editingRightChannel,
-        _intensity
+        repository.deviceIntensity
     ) { eq, ab, er, int ->
         Intermediate1C(eq, ab, er, int)
     }
@@ -733,7 +732,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private fun resetAllEffectsForAutoEq() {
         _isEqEnabled.value = true
         _isAbCompare.value = false
-        _intensity.value = 1.0f
+        repository.setDeviceIntensity(1.0f)
         repository.updateEnhancerConfig { EnhancerConfig() }
         val curHearing = repository.hearingCurve.value
         if (curHearing.enabled) {
@@ -1611,7 +1610,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setIntensity(value: Float) {
-        _intensity.value = value.coerceIn(0f, 2f)
+        repository.setDeviceIntensity(value)
     }
 
     fun setTiltBassDb(value: Float) {

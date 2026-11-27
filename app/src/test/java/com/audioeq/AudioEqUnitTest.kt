@@ -229,9 +229,9 @@ class AudioEqUnitTest {
         val lowCurve = EnhancerDsp.computeSubwooferCurve31(lowLpfCfg)
         val highCurve = EnhancerDsp.computeSubwooferCurve31(highLpfCfg)
 
-        assertTrue("40 Hz port peak must remain strong", lowCurve[3] > 6.5)
-        assertTrue("120 Hz Low-Pass Crossover must boost 80-125 Hz more than 55 Hz crossover", highCurve[6] > lowCurve[6] + 2.0)
-        assertTrue("120 Hz Low-Pass Crossover must boost 100 Hz more than 55 Hz crossover", highCurve[7] > lowCurve[7] + 2.0)
+        assertTrue("40 Hz port peak must remain strong within +6.0 dB ceiling", lowCurve[3] in 4.0..6.0)
+        assertTrue("120 Hz Low-Pass Crossover must boost 80-125 Hz more than 55 Hz crossover", highCurve[6] > lowCurve[6] + 1.5)
+        assertTrue("120 Hz Low-Pass Crossover must boost 100 Hz more than 55 Hz crossover", highCurve[7] > lowCurve[7] + 1.5)
     }
 
     @Test
@@ -422,10 +422,10 @@ class AudioEqUnitTest {
             userBand1Db = 2.0
         )
         assertEquals(31, deepCurve.size)
-        assertTrue("20 Hz sub-bass lift must exceed +3.8 dB", deepCurve[0] > 3.8)
-        assertTrue("31.5 Hz sub-bass lift must exceed +3.5 dB", deepCurve[2] > 3.5)
-        assertTrue("50 Hz fundamental peak must exceed +2.8 dB", deepCurve[4] > 2.8)
-        assertTrue("200 Hz anti-mud region must carve a negative pocket (< -1.0 dB)", deepCurve[10] < -1.0)
+        assertTrue("20 Hz sub-bass lift must exceed +2.8 dB", deepCurve[0] > 2.8)
+        assertTrue("31.5 Hz sub-bass lift must exceed +2.6 dB", deepCurve[2] > 2.6)
+        assertTrue("50 Hz fundamental peak must exceed +2.0 dB", deepCurve[4] > 2.0)
+        assertTrue("200 Hz anti-mud region must carve a negative pocket (< -0.8 dB)", deepCurve[10] < -0.8)
     }
 
     @Test
@@ -479,11 +479,11 @@ class AudioEqUnitTest {
 
         assertEquals(31, lowVolCurve.size)
         assertTrue("20 Hz Infrasonic Excursion Guard must cut <22 Hz sub-cone energy", lowVolCurve[0] < -5.5)
-        assertTrue("40 Hz Helmholtz port resonance must exceed +8 dB", lowVolCurve[3] > 8.0)
-        assertTrue("200 Hz Trunk Isolation Carve must cut lower-midrange mud (< -4.0 dB)", lowVolCurve[10] < -4.0)
+        assertTrue("40 Hz Helmholtz port resonance must stay within clean +6.0 dB ceiling", lowVolCurve[3] in 4.0..6.0)
+        assertTrue("200 Hz Trunk Isolation Carve must cut lower-midrange mud (< -2.0 dB)", lowVolCurve[10] < -2.0)
         assertTrue(
             "Fletcher-Munson equal-loudness must boost 40 Hz sub-port harder at low volume",
-            lowVolCurve[3] > highVolCurve[3] + 1.0
+            lowVolCurve[3] > highVolCurve[3] + 0.4
         )
 
         val processor = MidSideProcessor(48000)
@@ -530,7 +530,7 @@ class AudioEqUnitTest {
             )
         )
         assertArrayEquals(subOnly, subWithBassEnhancer, 0.001)
-        assertTrue("Subwoofer at 125% cabinet drive must deliver strong port slam (> 10 dB)", subOnly[3] > 10.0)
+        assertTrue("Subwoofer at 125% cabinet drive must deliver strong distortion-free port slam (4.8..6.0 dB)", subOnly[3] in 4.8..6.0)
 
         val subWithDeepBass = EnhancerDsp.computeCombinedEnhancer31(
             config = EnhancerConfig(
@@ -544,7 +544,7 @@ class AudioEqUnitTest {
         )
         assertTrue(
             "Enabling Deep Bass with Subwoofer must extend 20-25 Hz sub-infra response",
-            subWithDeepBass[0] > subOnly[0] + 2.0 && subWithDeepBass[1] > subOnly[1]
+            subWithDeepBass[0] > subOnly[0] + 1.5 && subWithDeepBass[1] > subOnly[1]
         )
     }
 }

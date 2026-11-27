@@ -681,20 +681,12 @@ object MusicAppTracker {
 
     fun getVerifiedMusicSessionIds(): Set<Int> {
         val result = LinkedHashSet<Int>()
-        if (privilegedModeActive) {
-            for ((sid, session) in privilegedMusicSessions) {
-                if (isPackageCurrentlyAllowed(session.packageName)) {
-                    result.add(sid)
-                }
-            }
-            return result
-        }
-        for ((sid, session) in broadcastMusicSessions) {
+        for ((sid, session) in privilegedMusicSessions) {
             if (isPackageCurrentlyAllowed(session.packageName)) {
                 result.add(sid)
             }
         }
-        for ((sid, session) in privilegedMusicSessions) {
+        for ((sid, session) in broadcastMusicSessions) {
             if (isPackageCurrentlyAllowed(session.packageName)) {
                 result.add(sid)
             }
@@ -704,22 +696,14 @@ object MusicAppTracker {
 
     fun getAllTrackedSessions(): List<TrackedMusicSession> {
         val merged = LinkedHashMap<Int, TrackedMusicSession>()
-        if (privilegedModeActive) {
-            for ((sid, s) in privilegedMusicSessions) {
-                if (isPackageCurrentlyAllowed(s.packageName)) {
-                    merged[sid] = s
-                }
+        for ((sid, s) in broadcastMusicSessions) {
+            if (isPackageCurrentlyAllowed(s.packageName)) {
+                merged[sid] = s
             }
-        } else {
-            for ((sid, s) in broadcastMusicSessions) {
-                if (isPackageCurrentlyAllowed(s.packageName)) {
-                    merged[sid] = s
-                }
-            }
-            for ((sid, s) in privilegedMusicSessions) {
-                if (isPackageCurrentlyAllowed(s.packageName)) {
-                    merged[sid] = s
-                }
+        }
+        for ((sid, s) in privilegedMusicSessions) {
+            if (isPackageCurrentlyAllowed(s.packageName)) {
+                merged[sid] = s
             }
         }
         return merged.values.sortedBy { it.sessionId }
@@ -736,6 +720,8 @@ object MusicAppTracker {
 
         if (!audioDumpsys.isNullOrBlank()) {
             val lines = audioDumpsys.lineSequence()
+            var lastSeenUid: Int? = null
+            var lastSeenPkg: String? = null
             for (line in lines) {
                 val lowerLine = line.lowercase(Locale.US)
                 if (lowerLine.contains("audio event log")) {
@@ -747,9 +733,15 @@ object MusicAppTracker {
                     val p = uPidPair.groupValues[2].toIntOrNull()
                     if (u != null && p != null && u >= 10000) {
                         pidToUid[p] = u
+                        lastSeenUid = u
                     }
                 }
-                if (!line.contains("sessionId", ignoreCase = true) && !line.contains("session:", ignoreCase = true)) {
+                val pkgMatchOnLine = Regex("""(?:pkg|package|client)\s*[:=]\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)""").find(line)
+                if (pkgMatchOnLine != null) {
+                    lastSeenPkg = pkgMatchOnLine.groupValues[1]
+                }
+
+                if (!line.contains("sessionId", ignoreCase = true) && !line.contains("session:", ignoreCase = true) && !line.contains("session=", ignoreCase = true)) {
                     continue
                 }
                 if (lowerLine.contains("state:released") ||
@@ -762,7 +754,9 @@ object MusicAppTracker {
                 }
                 if (lowerLine.contains("usage=") &&
                     !lowerLine.contains("usage=usage_media") &&
-                    !lowerLine.contains("usage=1 ")
+                    !lowerLine.contains("usage=usage_game") &&
+                    !lowerLine.contains("usage=usage_unknown") &&
+                    !Regex("""usage=(?:1|14|0)\b""").containsMatchIn(lowerLine)
                 ) {
                     continue
                 }
@@ -776,12 +770,12 @@ object MusicAppTracker {
                 val sid = sidMatch?.groupValues?.get(1)?.toIntOrNull() ?: continue
                 if (sid <= 0) continue
 
-                val pkgMatch = Regex("""(?:pkg|package)\s*[:=]\s*([a-zA-Z0-9_.]+)""").find(line)
                 val uidMatch = Regex("""(?:u/pid|uid)\s*[:=]\s*(\d+)""").find(line)
-                val uid = uidMatch?.groupValues?.get(1)?.toIntOrNull()
+                val uid = uidMatch?.groupValues?.get(1)?.toIntOrNull() ?: lastSeenUid
 
                 val candidatePkgs = mutableListOf<String>()
-                pkgMatch?.groupValues?.get(1)?.let { candidatePkgs.add(it) }
+                pkgMatchOnLine?.groupValues?.get(1)?.let { candidatePkgs.add(it) }
+                lastSeenPkg?.let { if (it !in candidatePkgs) candidatePkgs.add(it) }
                 if (uid != null && uid >= 10000) {
                     runCatching {
                         pm.getPackagesForUid(uid)?.let { candidatePkgs.addAll(it) }
@@ -789,6 +783,7 @@ object MusicAppTracker {
                 }
 
                 val matchedPkg = candidatePkgs.firstOrNull { isMusicAppPackage(context, it, AudioEffect.CONTENT_TYPE_MUSIC) }
+                    ?: candidatePkgs.firstOrNull { it != context.packageName && !it.startsWith("com.audioeq") && isPackageCurrentlyAllowed(it) }
                 if (matchedPkg != null) {
                     results[sid] = TrackedMusicSession(
                         sessionId = sid,
@@ -814,17 +809,19 @@ object MusicAppTracker {
                     continue
                 }
                 if (inEffectsBlock) continue
-                if (Regex("""\s+no\s+\d+""", RegexOption.IGNORE_CASE).containsMatchIn(line)) {
-                    continue
-                }
                 val sidMatch = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
-                if (sidMatch != null) {
-                    val sid = sidMatch.groupValues[1].toIntOrNull() ?: continue
-                    if (sid <= 0 || results.containsKey(sid)) continue
-                    val uidMatch = Regex("""\buid\s*[:=]?\s*(\d{5,})""", RegexOption.IGNORE_CASE).find(line)
+                val tabularMatch = if (sidMatch == null) {
+                    Regex("""^\s*\d+\s+(?:yes|no)\s+(\d+)\s+\d+\s+\S+\s+(\d+)""", RegexOption.IGNORE_CASE).find(line)
+                } else null
+
+                val sid = sidMatch?.groupValues?.get(1)?.toIntOrNull()
+                    ?: tabularMatch?.groupValues?.get(2)?.toIntOrNull()
+                if (sid != null && sid > 0 && !results.containsKey(sid)) {
+                    val uidMatch = Regex("""\buid\s*[:=]?\s*(\d{4,})""", RegexOption.IGNORE_CASE).find(line)
                     val clientMatch = Regex("""\bclient\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE).find(line)
                     val directUid = uidMatch?.groupValues?.get(1)?.toIntOrNull()
                     val clientId = clientMatch?.groupValues?.get(1)?.toIntOrNull()
+                        ?: tabularMatch?.groupValues?.get(1)?.toIntOrNull()
                     val resolvedUid = when {
                         directUid != null && directUid >= 10000 -> directUid
                         clientId != null && pidToUid.containsKey(clientId) -> pidToUid[clientId]
@@ -834,6 +831,7 @@ object MusicAppTracker {
                     if (resolvedUid != null && resolvedUid >= 10000) {
                         val pkgs = runCatching { pm.getPackagesForUid(resolvedUid)?.toList() ?: emptyList() }.getOrDefault(emptyList())
                         val matchedPkg = pkgs.firstOrNull { isMusicAppPackage(context, it, AudioEffect.CONTENT_TYPE_MUSIC) }
+                            ?: pkgs.firstOrNull { it != context.packageName && !it.startsWith("com.audioeq") && isPackageCurrentlyAllowed(it) }
                         if (matchedPkg != null) {
                             results[sid] = TrackedMusicSession(
                                 sessionId = sid,
@@ -842,6 +840,14 @@ object MusicAppTracker {
                                 source = "AudioFlinger"
                             )
                         }
+                    } else if (_activeMediaPackages.value.isNotEmpty()) {
+                        val activePkg = _activeMediaPackages.value.first()
+                        results[sid] = TrackedMusicSession(
+                            sessionId = sid,
+                            packageName = activePkg,
+                            appLabel = resolveAppLabel(context, activePkg),
+                            source = "AudioFlinger"
+                        )
                     }
                 }
             }

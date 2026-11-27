@@ -229,10 +229,10 @@ object ShizukuManager {
 
     private fun execSuCommand(command: String): String? {
         val bin = workingSuBinary ?: "su"
-        val res = runSuProcess(bin, command, useDashC = true, timeoutMs = 2500L)
-            ?: runSuProcess(bin, command, useDashC = false, timeoutMs = 2500L)
+        val res = runSuProcess(bin, command, useDashC = true, timeoutMs = 3500L)
+            ?: runSuProcess(bin, command, useDashC = false, timeoutMs = 3500L)
             ?: return null
-        return if (res.first == 0) res.second else null
+        return if (res.second.isNotBlank() || res.first == 0) res.second else null
     }
 
     private fun execPrivilegedCommand(command: String): String? {
@@ -243,7 +243,8 @@ object ShizukuManager {
             }
             val suOut = execSuCommand(command)
             if (!suOut.isNullOrBlank()) return suOut
-            val shizukuSuOut = execIfBound("su -c $command")
+            val escaped = command.replace("'", "'\\''")
+            val shizukuSuOut = execIfBound("su -c '$escaped'")
             if (!shizukuSuOut.isNullOrBlank()) return shizukuSuOut
         }
         return execIfBound(command) ?: if (rootAccessVerified) execSuCommand(command) else null
@@ -260,7 +261,7 @@ object ShizukuManager {
                 .start()
             runCatching { proc.outputStream.close() }
             val out = proc.inputStream.bufferedReader().use { it.readText() }
-            val finished = proc.waitFor(2000L, TimeUnit.MILLISECONDS)
+            val finished = proc.waitFor(2500L, TimeUnit.MILLISECONDS)
             if (finished && out.isNotBlank() && !out.contains("Permission Denial", ignoreCase = true)) {
                 out
             } else {
@@ -273,30 +274,52 @@ object ShizukuManager {
 
     fun discoverAudioFlingerSessions(musicOnly: Boolean = true): List<Int> {
         val ctx = appContext
-        val audioOutput = execPrivilegedCommand("dumpsys audio") ?: execDirectDumpsys("audio")
-        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger") ?: execDirectDumpsys("media.audio_flinger")
+        val audioOutput = execPrivilegedCommand("/system/bin/dumpsys audio")
+            ?: execPrivilegedCommand("dumpsys audio")
+            ?: execDirectDumpsys("audio")
+        val flingerOutput = execPrivilegedCommand("/system/bin/dumpsys media.audio_flinger")
+            ?: execPrivilegedCommand("dumpsys media.audio_flinger")
+            ?: execDirectDumpsys("media.audio_flinger")
 
-        if (ctx != null && musicOnly) {
-            val musicSessions = com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
+        val parsedMusicSessions = if (ctx != null) {
+            com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
                 context = ctx,
                 audioDumpsys = audioOutput,
                 flingerDumpsys = flingerOutput
             )
-            com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, musicSessions)
-            return musicSessions.map { it.sessionId }.distinct()
-        }
-        if (ctx != null) {
-            com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, emptyList())
+        } else {
+            emptyList()
         }
 
-        val combined = (audioOutput.orEmpty() + "\n" + flingerOutput.orEmpty())
-        if (combined.isBlank()) return emptyList()
-        val sessionRegex = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE)
-        return sessionRegex.findAll(combined)
-            .mapNotNull { it.groupValues[1].toIntOrNull() }
-            .filter { it > 0 }
-            .distinct()
-            .toList()
+        if (ctx != null) {
+            com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, parsedMusicSessions)
+        }
+
+        val discoveredIds = LinkedHashSet<Int>()
+        for (s in parsedMusicSessions) {
+            if (s.sessionId > 0) discoveredIds.add(s.sessionId)
+        }
+
+        if (!musicOnly || discoveredIds.isEmpty()) {
+            val combined = (audioOutput.orEmpty() + "\n" + flingerOutput.orEmpty())
+            if (combined.isNotBlank()) {
+                val activeBlockLines = combined.lineSequence().filter { line ->
+                    val low = line.lowercase()
+                    !low.contains("state:released") &&
+                        !low.contains("state:stopped") &&
+                        !low.contains("content_type_sonification")
+                }.joinToString("\n")
+                val sessionRegex = Regex("""(?:sessionId|session)\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
+                for (m in sessionRegex.findAll(activeBlockLines)) {
+                    val sid = m.groupValues[1].toIntOrNull() ?: continue
+                    if (sid > 0 && sid != 1) {
+                        discoveredIds.add(sid)
+                    }
+                }
+            }
+        }
+
+        return discoveredIds.toList()
     }
 
     fun readBluetoothCodecSummary(): String? {
@@ -662,7 +685,7 @@ object ShizukuManager {
         if (s == null) {
             bind()
             var waited = 0
-            while (service == null && waited < 500) {
+            while (service == null && waited < 1200) {
                 try {
                     Thread.sleep(50)
                 } catch (_: InterruptedException) {
@@ -675,7 +698,7 @@ object ShizukuManager {
         if (s != null) {
             try {
                 val out = s.exec(command)
-                if (!out.startsWith("ERROR")) {
+                if (!out.startsWith("ERROR") && out.isNotBlank()) {
                     return out
                 }
             } catch (_: Throwable) {

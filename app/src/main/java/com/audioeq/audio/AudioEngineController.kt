@@ -193,10 +193,20 @@ class AudioEngineController(
         )
 
         if (isPrivilegedMode && privilegeReady) {
-            val sessions = shizukuManager.discoverAudioFlingerSessions(
+            val discovered = shizukuManager.discoverAudioFlingerSessions(
                 musicOnly = latestRenderParams.musicOnlyTracking
             )
-            masterEngine.syncDiscoveredSessions(sessions)
+            val merged = LinkedHashSet<Int>()
+            for (sid in discovered) {
+                if (sid > 0) merged.add(sid)
+            }
+            if (latestRenderParams.musicOnlyTracking) {
+                merged.addAll(MusicAppTracker.getVerifiedMusicSessionIds())
+                merged.addAll(MusicAppTracker.getBroadcastSessionIds())
+            } else {
+                merged.addAll(MusicAppTracker.getAllBroadcastSessionIds())
+            }
+            masterEngine.syncDiscoveredSessions(merged)
             currentSampleRateHz = shizukuManager.readHardwareSampleRateHz()
             if (!systemEqResolved) {
                 val stopped = shizukuManager.stopCompetingSystemAudioEffects()
@@ -216,7 +226,12 @@ class AudioEngineController(
             }
         } else if (isPrivilegedMode) {
             MusicAppTracker.updatePrivilegedMusicSessions(context, emptyList())
-            val fallbackSids = MusicAppTracker.getVerifiedMusicSessionIds()
+            val fallbackSids = LinkedHashSet<Int>()
+            fallbackSids.addAll(MusicAppTracker.getVerifiedMusicSessionIds())
+            fallbackSids.addAll(MusicAppTracker.getBroadcastSessionIds())
+            if (!latestRenderParams.musicOnlyTracking) {
+                fallbackSids.addAll(MusicAppTracker.getAllBroadcastSessionIds())
+            }
             masterEngine.syncDiscoveredSessions(fallbackSids)
             currentSampleRateHz = 48000
             currentBluetoothCodec = null

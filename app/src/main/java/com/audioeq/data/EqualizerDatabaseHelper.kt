@@ -19,7 +19,7 @@ class EqualizerDatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "audio_eq_studio.db"
-        const val DATABASE_VERSION = 10
+        const val DATABASE_VERSION = 11
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -107,6 +107,8 @@ class EqualizerDatabaseHelper(context: Context) :
             """.trimIndent()
         )
 
+        createDeviceEnhancerTable(db)
+
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -118,6 +120,32 @@ class EqualizerDatabaseHelper(context: Context) :
 
         createAndSeedSpecificationTables(db)
         seedDefaultData(db)
+    }
+
+    private fun createDeviceEnhancerTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS device_enhancer_settings (
+                device_key TEXT PRIMARY KEY,
+                dialogue_enabled INTEGER NOT NULL DEFAULT 0,
+                dialogue_amount INTEGER NOT NULL DEFAULT 0,
+                bass_enabled INTEGER NOT NULL DEFAULT 0,
+                bass_boost_db REAL NOT NULL DEFAULT 0.0,
+                virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                virtual_bass_strength REAL NOT NULL DEFAULT 0.0,
+                deep_bass_enabled INTEGER NOT NULL DEFAULT 0,
+                surround_enabled INTEGER NOT NULL DEFAULT 0,
+                surround_width REAL NOT NULL DEFAULT 0.0,
+                subwoofer_enabled INTEGER NOT NULL DEFAULT 0,
+                subwoofer_intensity REAL NOT NULL DEFAULT 0.0,
+                subwoofer_sub_octave_mix REAL NOT NULL DEFAULT 0.0,
+                subwoofer_auto_loudness INTEGER NOT NULL DEFAULT 1,
+                subwoofer_crossover_hz REAL NOT NULL DEFAULT 58.0,
+                audio_profile_id TEXT NOT NULL DEFAULT 'profile_off',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -168,6 +196,9 @@ class EqualizerDatabaseHelper(context: Context) :
                 db.insertWithOnConflict("presets", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
             createAndSeedSpecificationTables(db)
+        }
+        if (oldVersion < 11) {
+            createDeviceEnhancerTable(db)
         }
     }
 
@@ -314,25 +345,22 @@ class EqualizerDatabaseHelper(context: Context) :
         db.insertWithOnConflict("route_profiles", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
-    fun loadEnhancerConfig(): EnhancerConfig {
+    fun loadEnhancerConfig(deviceKey: String = "speaker:builtin"): EnhancerConfig {
         val db = readableDatabase
-        val subEnabled = getSetting("subwoofer_enabled", "0") == "1"
-        val rawSubIntensity = getSetting("subwoofer_intensity", "0.0").toFloatOrNull()?.coerceIn(0f, 1.5f) ?: 0.0f
-        val subIntensity = if (!subEnabled) 0.0f else rawSubIntensity
-        val rawSubOctaveMix = getSetting("subwoofer_sub_octave_mix", "0.0").toFloatOrNull()?.coerceIn(0f, 0.6f) ?: 0.0f
-        val subOctaveMix = if (!subEnabled) 0.0f else rawSubOctaveMix
-        val subAutoLoudness = getSetting("subwoofer_auto_loudness", "1") == "1"
-        val subCrossoverHz = getSetting("subwoofer_crossover_hz", "58.0").toFloatOrNull()?.coerceIn(55f, 120f) ?: 58.0f
+        createDeviceEnhancerTable(db)
+        val normalizedKey = deviceKey.trim().ifEmpty { "speaker:builtin" }
         db.rawQuery(
             """
             SELECT dialogue_enabled, dialogue_amount,
                    bass_enabled, bass_boost_db,
                    virtual_bass_enabled, virtual_bass_strength,
                    deep_bass_enabled, surround_enabled, surround_width,
+                   subwoofer_enabled, subwoofer_intensity, subwoofer_sub_octave_mix,
+                   subwoofer_auto_loudness, subwoofer_crossover_hz,
                    audio_profile_id
-            FROM enhancer_settings WHERE id = 1
+            FROM device_enhancer_settings WHERE device_key = ?
             """.trimIndent(),
-            null
+            arrayOf(normalizedKey)
         ).use { cursor ->
             if (cursor.moveToFirst()) {
                 val dlgOn = cursor.getInt(0) == 1
@@ -344,7 +372,12 @@ class EqualizerDatabaseHelper(context: Context) :
                 val deepBassOn = cursor.getInt(6) == 1
                 val surrOn = cursor.getInt(7) == 1
                 val surrWidth = if (surrOn) cursor.getFloat(8).coerceIn(0f, 1f) else 0.0f
-                val prof = AudioProfile.fromId(cursor.getString(9))
+                val subOn = cursor.getInt(9) == 1
+                val subInt = if (subOn) cursor.getFloat(10).coerceIn(0f, 1.5f) else 0.0f
+                val subOct = if (subOn) cursor.getFloat(11).coerceIn(0f, 0.6f) else 0.0f
+                val subLoud = cursor.getInt(12) == 1
+                val subCross = cursor.getFloat(13).coerceIn(55f, 120f)
+                val prof = AudioProfile.fromId(cursor.getString(14))
                 return EnhancerConfig(
                     profile = prof,
                     bassEnabled = bassOn,
@@ -356,25 +389,42 @@ class EqualizerDatabaseHelper(context: Context) :
                     dialogueAmount = dlgAmt,
                     surroundEnabled = surrOn,
                     surroundWidth = surrWidth,
-                    subwooferEnabled = subEnabled,
-                    subwooferIntensity = subIntensity,
-                    subwooferSubOctaveMix = subOctaveMix,
-                    subwooferAutoLoudness = subAutoLoudness,
-                    subwooferCrossoverHz = subCrossoverHz
+                    subwooferEnabled = subOn,
+                    subwooferIntensity = subInt,
+                    subwooferSubOctaveMix = subOct,
+                    subwooferAutoLoudness = subLoud,
+                    subwooferCrossoverHz = subCross
                 )
             }
         }
-        return EnhancerConfig(
-            subwooferEnabled = subEnabled,
-            subwooferIntensity = subIntensity,
-            subwooferSubOctaveMix = subOctaveMix,
-            subwooferAutoLoudness = subAutoLoudness,
-            subwooferCrossoverHz = subCrossoverHz
-        )
+        return EnhancerConfig()
     }
 
-    fun saveEnhancerConfig(config: EnhancerConfig) {
+    fun saveEnhancerConfig(config: EnhancerConfig, deviceKey: String = "speaker:builtin") {
         val db = writableDatabase
+        createDeviceEnhancerTable(db)
+        val normalizedKey = deviceKey.trim().ifEmpty { "speaker:builtin" }
+        val deviceCv = ContentValues().apply {
+            put("device_key", normalizedKey)
+            put("dialogue_enabled", if (config.dialogueEnhancerEnabled) 1 else 0)
+            put("dialogue_amount", config.dialogueAmount.coerceIn(0, 16))
+            put("bass_enabled", if (config.bassEnabled) 1 else 0)
+            put("bass_boost_db", config.bassBoostDb.coerceIn(0f, 6f))
+            put("virtual_bass_enabled", if (config.virtualBassEnabled) 1 else 0)
+            put("virtual_bass_strength", config.virtualBassStrength.coerceIn(0f, 1f))
+            put("deep_bass_enabled", if (config.deepBassEnabled) 1 else 0)
+            put("surround_enabled", if (config.surroundEnabled) 1 else 0)
+            put("surround_width", config.surroundWidth.coerceIn(0f, 1f))
+            put("subwoofer_enabled", if (config.subwooferEnabled) 1 else 0)
+            put("subwoofer_intensity", config.subwooferIntensity.coerceIn(0f, 1.5f))
+            put("subwoofer_sub_octave_mix", config.subwooferSubOctaveMix.coerceIn(0f, 0.6f))
+            put("subwoofer_auto_loudness", if (config.subwooferAutoLoudness) 1 else 0)
+            put("subwoofer_crossover_hz", config.subwooferCrossoverHz.coerceIn(55f, 120f))
+            put("audio_profile_id", config.profile.id)
+            put("updated_at", System.currentTimeMillis())
+        }
+        db.insertWithOnConflict("device_enhancer_settings", null, deviceCv, SQLiteDatabase.CONFLICT_REPLACE)
+
         val cv = ContentValues().apply {
             put("id", 1)
             put("dialogue_enabled", if (config.dialogueEnhancerEnabled) 1 else 0)
@@ -389,11 +439,6 @@ class EqualizerDatabaseHelper(context: Context) :
             put("audio_profile_id", config.profile.id)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        setSetting("subwoofer_enabled", if (config.subwooferEnabled) "1" else "0")
-        setSetting("subwoofer_intensity", config.subwooferIntensity.coerceIn(0f, 1.5f).toString())
-        setSetting("subwoofer_sub_octave_mix", config.subwooferSubOctaveMix.coerceIn(0f, 0.6f).toString())
-        setSetting("subwoofer_auto_loudness", if (config.subwooferAutoLoudness) "1" else "0")
-        setSetting("subwoofer_crossover_hz", config.subwooferCrossoverHz.coerceIn(55f, 120f).toString())
     }
 
     fun loadAllPresets(): List<EqPreset> {

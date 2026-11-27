@@ -48,8 +48,11 @@ class EqRepository(context: Context) {
     private val _hearingCurve = MutableStateFlow(dbHelper.loadHearingCurve())
     val hearingCurve: StateFlow<PersonalHearingCurve> = _hearingCurve.asStateFlow()
 
-    private val _enhancerConfig = MutableStateFlow(dbHelper.loadEnhancerConfig())
+    private val _enhancerConfig = MutableStateFlow(dbHelper.loadEnhancerConfig(_activeDeviceKey.value))
     val enhancerConfig: StateFlow<EnhancerConfig> = _enhancerConfig.asStateFlow()
+
+    private val _deviceIntensity = MutableStateFlow(loadDeviceIntensity(_activeDeviceKey.value))
+    val deviceIntensity: StateFlow<Float> = _deviceIntensity.asStateFlow()
 
     private val _customHeadphoneProfiles = MutableStateFlow<List<HeadphoneProfile>>(loadCustomHeadphoneProfiles())
     val customHeadphoneProfiles: StateFlow<List<HeadphoneProfile>> = _customHeadphoneProfiles.asStateFlow()
@@ -298,14 +301,28 @@ class EqRepository(context: Context) {
         _wallpaperExtractActive.value = fromWallpaper
     }
 
+    private fun loadDeviceIntensity(deviceKey: String): Float {
+        return prefs.getFloat("device_intensity_$deviceKey", 1.0f).coerceIn(0f, 2f)
+    }
+
+    fun setDeviceIntensity(intensity: Float) {
+        val clamped = intensity.coerceIn(0f, 2f)
+        val devKey = _activeDeviceKey.value
+        prefs.edit().putFloat("device_intensity_$devKey", clamped).apply()
+        _deviceIntensity.value = clamped
+    }
+
     fun switchOutputRoute(route: OutputRoute, deviceKey: String = route.id) {
+        val normalizedKey = deviceKey.trim().ifEmpty { route.id }
         prefs.edit()
             .putString(KEY_ACTIVE_ROUTE, route.id)
-            .putString(KEY_ACTIVE_DEVICE_KEY, deviceKey)
+            .putString(KEY_ACTIVE_DEVICE_KEY, normalizedKey)
             .apply()
         _activeRoute.value = route
-        _activeDeviceKey.value = deviceKey
-        _currentRouteProfile.value = dbHelper.loadRouteProfile(route, deviceKey)
+        _activeDeviceKey.value = normalizedKey
+        _currentRouteProfile.value = dbHelper.loadRouteProfile(route, normalizedKey)
+        _enhancerConfig.value = dbHelper.loadEnhancerConfig(normalizedKey)
+        _deviceIntensity.value = loadDeviceIntensity(normalizedKey)
     }
 
     fun updateCurrentRouteProfile(transform: (RouteMemoryProfile) -> RouteMemoryProfile) {
@@ -315,8 +332,9 @@ class EqRepository(context: Context) {
     }
 
     fun updateEnhancerConfig(transform: (EnhancerConfig) -> EnhancerConfig) {
+        val devKey = _activeDeviceKey.value
         val updated = transform(_enhancerConfig.value)
-        dbHelper.saveEnhancerConfig(updated)
+        dbHelper.saveEnhancerConfig(updated, devKey)
         _enhancerConfig.value = updated
     }
 

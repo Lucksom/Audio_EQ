@@ -289,4 +289,72 @@ class AudioEqRobolectricTest {
             engine.release()
         }
     }
+
+    @Test
+    fun `verify per-device Equalizer and Enhancer settings save and switch independently across Speaker Wired and Bluetooth`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = com.audioeq.data.EqRepository(context)
+
+        repo.switchOutputRoute(com.audioeq.model.OutputRoute.SPEAKER, "speaker:builtin")
+        repo.updateBandGain(0, 2.0f)
+        repo.updateEnhancerConfig {
+            it.copy(
+                subwooferEnabled = true,
+                subwooferIntensity = 0.40f,
+                deepBassEnabled = true
+            )
+        }
+
+        repo.switchOutputRoute(com.audioeq.model.OutputRoute.BLUETOOTH, "bt:AA:BB:CC:DD:EE:FF")
+        assertEquals(0.0f, repo.currentRouteProfile.value.bandGainsDb[0], 0.01f)
+        assertEquals(false, repo.enhancerConfig.value.subwooferEnabled)
+        assertEquals(0.0f, repo.enhancerConfig.value.subwooferIntensity, 0.01f)
+
+        repo.updateBandGain(0, 4.5f)
+        repo.updateEnhancerConfig {
+            it.copy(
+                subwooferEnabled = true,
+                subwooferIntensity = 0.15f,
+                deepBassEnabled = false
+            )
+        }
+
+        repo.switchOutputRoute(com.audioeq.model.OutputRoute.HEADPHONES, "wired:3.5mm")
+        assertEquals(0.0f, repo.currentRouteProfile.value.bandGainsDb[0], 0.01f)
+        assertEquals(false, repo.enhancerConfig.value.subwooferEnabled)
+
+        repo.switchOutputRoute(com.audioeq.model.OutputRoute.SPEAKER, "speaker:builtin")
+        assertEquals(2.0f, repo.currentRouteProfile.value.bandGainsDb[0], 0.01f)
+        assertEquals(true, repo.enhancerConfig.value.subwooferEnabled)
+        assertEquals(0.40f, repo.enhancerConfig.value.subwooferIntensity, 0.01f)
+        assertEquals(true, repo.enhancerConfig.value.deepBassEnabled)
+
+        repo.switchOutputRoute(com.audioeq.model.OutputRoute.BLUETOOTH, "bt:AA:BB:CC:DD:EE:FF")
+        assertEquals(4.5f, repo.currentRouteProfile.value.bandGainsDb[0], 0.01f)
+        assertEquals(true, repo.enhancerConfig.value.subwooferEnabled)
+        assertEquals(0.15f, repo.enhancerConfig.value.subwooferIntensity, 0.01f)
+        assertEquals(false, repo.enhancerConfig.value.deepBassEnabled)
+    }
+
+    @Test
+    fun `verify MasterEqEngine in Root and Shizuku modes disables Global Mix 0 and attaches discovered app sessions`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = com.audioeq.audio.MasterEqEngine(
+            context = context,
+            onRouteOrDeviceChanged = { _, _, _ -> },
+            onSessionsChanged = { _, _ -> }
+        )
+        try {
+            engine.setEngineMode(com.audioeq.model.EngineMode.ADB_SHIZUKU, privilegeReady = true)
+            engine.syncDiscoveredSessions(listOf(707, 808))
+            Thread.sleep(150L)
+
+            val sids = engine.getActiveSessionIds()
+            assertTrue("Shizuku mode must attach discovered session 707", sids.contains(707))
+            assertTrue("Shizuku mode must attach discovered session 808", sids.contains(808))
+            org.junit.Assert.assertFalse("Shizuku mode must disable Global Mix 0", sids.contains(0))
+        } finally {
+            engine.release()
+        }
+    }
 }

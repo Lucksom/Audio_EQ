@@ -538,14 +538,14 @@ object EnhancerDsp {
         if (!active) return result
 
         val driveScale = if (config.bassEnabled && config.bassBoostDb > 0.5f) {
-            (0.85 + (config.bassBoostDb.toDouble() / 12.0)).coerceIn(0.85, 1.25)
+            (0.85 + (config.bassBoostDb.toDouble() / 16.0)).coerceIn(0.85, 1.15)
         } else {
             1.0
         }
 
-        val g0ShelfDb = (3.4 * driveScale).coerceIn(2.5, 4.5)
-        val g1PeakDb = (2.2 * driveScale).coerceIn(1.6, 3.2)
-        val gMudCutDb = (-1.4 * driveScale).coerceIn(-2.0, -1.0)
+        val g0ShelfDb = (2.6 * driveScale).coerceIn(2.0, 3.2)
+        val g1PeakDb = (1.6 * driveScale).coerceIn(1.2, 2.2)
+        val gMudCutDb = (-1.2 * driveScale).coerceIn(-1.6, -0.9)
 
         val freqs = EqConstants.BAND_FREQUENCIES_31
         for (i in 0 until 31) {
@@ -571,7 +571,7 @@ object EnhancerDsp {
                 q = 1.40,
                 sampleRate = sampleRate
             )
-            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-3.0, 6.0)
+            result[i] = (stageADb + stageBDb + stageMudCutDb).coerceIn(-2.5, 4.5)
         }
         return result
     }
@@ -623,22 +623,24 @@ object EnhancerDsp {
         val result = DoubleArray(31)
         if (!config.bassEnabled || config.bassBoostDb <= 0.05f) return result
 
-        val boost = config.bassBoostDb.toDouble().coerceIn(0.0, 6.0)
+        val rawBoost = config.bassBoostDb.toDouble().coerceIn(0.0, 6.0)
+        val norm = rawBoost / 6.0
+        val boost = (6.0 * norm.pow(1.25)).coerceIn(0.0, 6.0)
         val freqs = EqConstants.BAND_FREQUENCIES_31
 
         for (i in 0 until 31) {
             val f = freqs[i]
             val ratio = f / 85.0
-            val shelfGain = (boost * 0.88) / sqrt(1.0 + ratio.pow(4.0))
+            val shelfGain = (boost * 0.85) / sqrt(1.0 + ratio.pow(4.0))
 
             val logDist55 = ln(f / 55.0)
-            val punchBell = (boost * 0.44) * exp(-0.5 * (logDist55 / 0.36).pow(2.0))
+            val punchBell = (boost * 0.42) * exp(-0.5 * (logDist55 / 0.36).pow(2.0))
 
             val logDist82 = ln(f / 82.0)
-            val upperPunchBell = (boost * 0.28) * exp(-0.5 * (logDist82 / 0.30).pow(2.0))
+            val upperPunchBell = (boost * 0.26) * exp(-0.5 * (logDist82 / 0.30).pow(2.0))
 
             val logDist2500 = ln(f / 2500.0)
-            val beaterClickBell = (boost * 0.20) * exp(-0.5 * (logDist2500 / 0.28).pow(2.0))
+            val beaterClickBell = (boost * 0.18) * exp(-0.5 * (logDist2500 / 0.28).pow(2.0))
 
             result[i] = (shelfGain + punchBell + upperPunchBell + beaterClickBell).coerceIn(0.0, boost)
         }
@@ -652,29 +654,30 @@ object EnhancerDsp {
         val result = DoubleArray(31)
         if (!config.subwooferEnabled || config.subwooferIntensity <= 0.02f) return result
 
-        val wInt = config.subwooferIntensity.coerceIn(0.0f, 1.5f).toDouble()
+        val rawInt = config.subwooferIntensity.coerceIn(0.0f, 1.5f).toDouble()
+        val wInt = (rawInt / 1.0).pow(1.12) * 1.0
         val loudnessComp = if (config.subwooferAutoLoudness) {
-            1.0 + 0.35 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
+            1.0 + 0.22 * (1.0 - volumeRatio.coerceIn(0.1f, 1.0f).toDouble())
         } else {
             1.0
         }
-        val subOctScale = 0.85 + 0.45 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
-        val eff = (wInt * loudnessComp).coerceAtMost(1.65)
+        val subOctScale = 0.88 + 0.25 * config.subwooferSubOctaveMix.coerceIn(0.0f, 0.6f).toDouble()
+        val eff = (wInt * loudnessComp).coerceAtMost(1.45)
         val crossoverHz = config.subwooferCrossoverHz.coerceIn(55f, 120f).toDouble()
         val crossoverScale = ((crossoverHz - 55.0) / 65.0).coerceIn(0.0, 1.0)
 
-        result[0] = (-6.5 * wInt).coerceIn(-10.0, 0.0)
-        result[1] = (3.5 * eff * subOctScale).coerceIn(0.0, 7.5)
-        result[2] = (7.0 * eff * subOctScale).coerceIn(0.0, 14.0)
-        result[3] = (8.0 * eff * subOctScale).coerceIn(0.0, 14.5)
-        result[4] = (6.5 * eff).coerceIn(0.0, 12.5)
-        result[5] = (4.0 * eff * (0.95 + 0.45 * crossoverScale)).coerceIn(0.0, 10.5)
-        result[6] = (1.5 * eff + 4.2 * eff * crossoverScale).coerceIn(0.0, 8.5)
-        result[7] = (3.8 * eff * crossoverScale).coerceIn(0.0, 6.5)
-        result[8] = (2.2 * eff * crossoverScale).coerceIn(0.0, 4.0)
-        result[9] = (-3.0 * wInt * (1.0 - 0.35 * crossoverScale)).coerceIn(-5.0, 0.0)
-        result[10] = (-4.5 * wInt).coerceIn(-7.5, 0.0)
-        result[11] = (-2.5 * wInt).coerceIn(-4.5, 0.0)
+        result[0] = (-6.0 * rawInt).coerceIn(-9.0, 0.0)
+        result[1] = (1.6 * eff * subOctScale).coerceIn(0.0, 3.6)
+        result[2] = (3.4 * eff * subOctScale).coerceIn(0.0, 5.5)
+        result[3] = (4.1 * eff * subOctScale).coerceIn(0.0, 6.0)
+        result[4] = (3.4 * eff).coerceIn(0.0, 5.4)
+        result[5] = (2.2 * eff * (0.95 + 0.35 * crossoverScale)).coerceIn(0.0, 4.6)
+        result[6] = (1.0 * eff + 1.8 * eff * crossoverScale).coerceIn(0.0, 3.8)
+        result[7] = (1.6 * eff * crossoverScale).coerceIn(0.0, 2.8)
+        result[8] = (0.9 * eff * crossoverScale).coerceIn(0.0, 1.8)
+        result[9] = (-1.6 * rawInt * (1.0 - 0.35 * crossoverScale)).coerceIn(-3.0, 0.0)
+        result[10] = (-2.6 * rawInt).coerceIn(-4.5, 0.0)
+        result[11] = (-1.4 * rawInt).coerceIn(-2.5, 0.0)
 
         return result
     }
